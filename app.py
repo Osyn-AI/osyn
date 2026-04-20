@@ -285,12 +285,12 @@ def _resolve_conversation_chat(conv_id: int, req: ConversationChatRequest) -> tu
     else:
         user_msgs = [m.model_dump() for m in req.messages]
 
+    # Pure-function semantic: the model sees ONLY the saved system prompt
+    # + saved params + the messages supplied in this request. Saved chat
+    # history is never replayed — it exists only for the UI to render.
+    # Callers that want multi-turn context must pass the full `messages`
+    # array themselves.
     ollama_messages = [{"role": "system", "content": effective["system_prompt"]}]
-    # If persisting, include prior conversation history for context.
-    if req.persist:
-        for m in conv.get("messages", []):
-            if m.get("role") in ("user", "assistant"):
-                ollama_messages.append({"role": m["role"], "content": m["content"]})
     ollama_messages.extend(user_msgs)
 
     return conv, ollama_messages, effective

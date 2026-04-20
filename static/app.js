@@ -151,21 +151,39 @@ function syncParamDisplay() {
 
 // Debounced autosave of the current conversation's config.
 let saveTimer = null;
+
+function _buildConfigPatch() {
+  return {
+    ...getParams(),
+    model: els.modelSelect.value || undefined,
+    system_prompt: els.systemPrompt.value || undefined,
+  };
+}
+
 function scheduleSaveToConversation() {
   if (!state.conversationId) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    const patch = {
-      ...getParams(),
-      model: els.modelSelect.value || undefined,
-      system_prompt: els.systemPrompt.value || undefined,
-    };
     fetch(`/api/conversations/${state.conversationId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
+      body: JSON.stringify(_buildConfigPatch()),
     }).catch(() => {});
   }, 350);
+}
+
+// Cancel any pending debounce and PATCH immediately. Returned promise
+// resolves once the server has acknowledged the current sidebar state.
+async function flushPendingSave() {
+  if (!state.conversationId) return;
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  try {
+    await fetch(`/api/conversations/${state.conversationId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(_buildConfigPatch()),
+    });
+  } catch (_) { /* offline / transient — snippet still works with prior saved state */ }
 }
 
 function bindParamDisplay() {
@@ -408,17 +426,20 @@ async function sendMessage(text) {
   els.sendBtn.disabled = true;
   els.input.disabled = true;
 
+  // Ensure the server's saved config matches the sidebar BEFORE we fire
+  // the call. This way the GUI Send button is identical to the cURL
+  // snippet shown in "Get API Code" — both hit the conversation's pure-
+  // function endpoint with just `{message}` and rely on saved state.
+  await flushPendingSave();
+
   try {
-    const res = await fetch("/api/chat/stream", {
+    const res = await fetch(`/api/conversations/${state.conversationId}/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: ac.signal,
       body: JSON.stringify({
-        model,
-        messages: state.messages.filter(m => m.role !== "system").map(m => ({ role: m.role, content: m.content })),
-        system_prompt: els.systemPrompt.value || "You are a helpful AI assistant.",
-        conversation_id: state.conversationId,
-        ...params,
+        message: text,
+        persist: true,   // save turn for UI display; model still sees stateless input
       }),
     });
 
@@ -605,7 +626,11 @@ function paintSnippet() {
   }
 }
 
-function openModal() {
+async function openModal() {
+  // Make sure the server's saved config matches the sidebar before the user
+  // copies a snippet that hits the conversation endpoint. Without this, a
+  // pending 350ms debounce could leave the server on stale params.
+  await flushPendingSave();
   paintSnippet();
   els.modalBackdrop.classList.remove("hidden");
 }
