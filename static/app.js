@@ -31,6 +31,7 @@ const els = {
   themeIconLight: document.getElementById("theme-icon-light"),
   themeIconDark: document.getElementById("theme-icon-dark"),
   themeIconSystem: document.getElementById("theme-icon-system"),
+  sidebarToggle: document.getElementById("sidebar-toggle"),
   statusLine: document.getElementById("status-line"),
   messages: document.getElementById("messages"),
   form: document.getElementById("chat-form"),
@@ -866,6 +867,25 @@ function initTheme() {
   });
 }
 
+// ---------- Sidebar collapse ----------
+const SIDEBAR_COLLAPSED_KEY = "miniclosedai:sidebarCollapsed";
+
+function applySidebarCollapsed(collapsed) {
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  els.sidebarToggle.title = collapsed ? "Show sidebar" : "Hide sidebar";
+  els.sidebarToggle.setAttribute("aria-label", collapsed ? "Show sidebar" : "Hide sidebar");
+}
+
+function initSidebarToggle() {
+  const saved = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+  applySidebarCollapsed(saved);
+  els.sidebarToggle.addEventListener("click", () => {
+    const now = !document.body.classList.contains("sidebar-collapsed");
+    applySidebarCollapsed(now);
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, now);
+  });
+}
+
 // ---------- Suggestion chips (empty state) — delegated so re-renders work ----------
 function initSuggestionChips() {
   els.messages.addEventListener("click", e => {
@@ -885,6 +905,7 @@ function autoGrowInput() {
 
 async function init() {
   initTheme();
+  initSidebarToggle();
   loadSettings();
   bindParamDisplay();
   bindChat();
