@@ -352,7 +352,7 @@ function renderMessage(m) {
   div.className = `msg ${m.role}`;
   if (m.role === "user") {
     div.textContent = m.content;
-    if (m.params) appendParamsBadge(div, m.params);
+    // params are stored on user messages for reproducibility but not displayed
   } else {
     // Wrap assistant content in a single child so the flex avatar lays out correctly.
     const body = document.createElement("div");
