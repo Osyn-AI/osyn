@@ -8,6 +8,21 @@ Built with **FastAPI** (3 Python deps), vanilla JS, and SQLite. Runs on a laptop
   <img src="miniclsedai1.png"
        alt="MiniClosedAI — a saved Pikachu bot responding to a message, with system prompt and parameters visible in the sidebar"
        width="820">
+  <br><em>A saved bot. The sidebar is the full control panel; the chat is the live test.</em>
+</p>
+
+<p align="center">
+  <img src="miniclosedai2.png"
+       alt="Sentiment classifier bot: a reasoning model's 'Thoughts' block is expanded above the final one-word answer ('positive')"
+       width="820">
+  <br><em>Reasoning models stream their chain-of-thought into a collapsible block, separate from the final answer.</em>
+</p>
+
+<p align="center">
+  <img src="miniclosedai3.png"
+       alt="API Integration Code modal with three toggle groups — Language, Mode, Style — showing the JavaScript / Non-streaming / OpenAI-compat variant pointed at this instance"
+       width="820">
+  <br><em>Every saved chat is a microservice. Copy the snippet as cURL, Python, or JavaScript — native or OpenAI-SDK-compatible.</em>
 </p>
 
 ![stack](https://img.shields.io/badge/FastAPI-0.110+-009688) ![Ollama](https://img.shields.io/badge/Ollama-local-000000) ![license](https://img.shields.io/badge/license-MIT-blue)
@@ -199,13 +214,6 @@ Also: a **vertical splitter** between sidebar and chat lets you widen the sideba
 - Each assistant message shows a params badge (model · T · max · top_p · top_k) for reproducibility.
 - **Stop button** (square icon) replaces **Send** (paper-plane icon) while streaming — click to abort.
 
-<p align="center">
-  <img src="miniclosedai2.png"
-       alt="Sentiment classifier bot: a reasoning model's 'Thoughts' block is expanded above the final one-word answer ('positive')"
-       width="820">
-</p>
-<p align="center"><em>Reasoning models stream their chain-of-thought into a collapsible block, separate from the final answer.</em></p>
-
 ### Empty state
 
 Shows a greeting and four **suggestion chips** that pre-fill the composer. Handy for first-time use; disappears as soon as you send a message.
@@ -219,13 +227,6 @@ Three independent toggles produce **12 snippet variants**:
 - **Style**: Native · OpenAI-compat
 
 Copy button works on both HTTPS/localhost (via `navigator.clipboard`) and plain-HTTP LAN (falls back to `document.execCommand("copy")`).
-
-<p align="center">
-  <img src="miniclosedai3.png"
-       alt="API Integration Code modal with three toggle groups — Language, Mode, Style — showing the JavaScript / Non-streaming / OpenAI-compat variant pointed at this instance"
-       width="820">
-</p>
-<p align="center"><em>The same saved bot, emitted as OpenAI-SDK-compatible JavaScript. Swap the Style toggle for Native, or the Language toggle for cURL/Python, to see the other 11 variants.</em></p>
 
 ---
 
