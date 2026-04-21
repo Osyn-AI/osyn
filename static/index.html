@@ -200,10 +200,16 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
-      <div class="tabs">
-        <button class="tab active" data-tab="curl">cURL</button>
-        <button class="tab" data-tab="python">Python</button>
-        <button class="tab" data-tab="js">JavaScript</button>
+      <div class="modal-toolbar">
+        <div class="tabs" data-group="lang">
+          <button class="tab active" data-tab="curl">cURL</button>
+          <button class="tab" data-tab="python">Python</button>
+          <button class="tab" data-tab="js">JavaScript</button>
+        </div>
+        <div class="tabs" data-group="mode">
+          <button class="tab active" data-mode="stream">Streaming</button>
+          <button class="tab" data-mode="sync">Non-streaming</button>
+        </div>
       </div>
       <pre><code id="code-snippet"></code></pre>
       <div class="modal-actions">

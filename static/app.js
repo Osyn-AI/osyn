@@ -41,10 +41,12 @@ const els = {
   modalClose: document.getElementById("modal-close"),
   codeSnippet: document.getElementById("code-snippet"),
   copyCode: document.getElementById("copy-code"),
-  tabs: document.querySelectorAll(".tab"),
+  langTabs: document.querySelectorAll('.tabs[data-group="lang"] .tab'),
+  modeTabs: document.querySelectorAll('.tabs[data-group="mode"] .tab'),
 };
 
 const DEFAULTS = { temperature: 0.7, max_tokens: 2048, top_p: 0.9, top_k: 40 };
+const DEFAULT_SYSTEM_PROMPT = "You are a helpful AI assistant.";
 const SMALL_MODEL_PREFIXES = [
   "qwen2.5:0.5b", "qwen2.5:1.5b", "qwen2.5:3b", "qwen2.5:7b",
   "llama3.2:1b", "llama3.2:3b", "llama3.1:8b",
@@ -58,7 +60,8 @@ const SMALL_MODEL_PREFIXES = [
 let state = {
   conversationId: null,
   messages: [], // [{role, content, params?}]
-  activeTab: "curl",
+  activeTab: "curl",       // "curl" | "python" | "js"
+  activeMode: "stream",    // "stream" | "sync"
   abortController: null,
 };
 
@@ -311,14 +314,21 @@ async function newConversation() {
     alert("Pick a model first.");
     return;
   }
+  const input = prompt("Name this chat:", "");
+  if (input === null) return;                 // user cancelled
+  const title = input.trim() || "New Chat";
+
+  // Every new bot starts from a clean slate — default system prompt and params.
+  // Model is carried over from the current selection since there's no universal
+  // "default" model (it depends on what the user has pulled in Ollama).
   const r = await fetch("/api/conversations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
-      system_prompt: els.systemPrompt.value || "You are a helpful AI assistant.",
-      title: "New Chat",
-      ...getParams(),
+      system_prompt: DEFAULT_SYSTEM_PROMPT,
+      title,
+      ...DEFAULTS,
     }),
   });
   const c = await r.json();
@@ -327,6 +337,27 @@ async function newConversation() {
   await loadConversations();
   els.convSelect.value = String(c.id);
   renderMessages();
+
+  // Reset the sidebar so the user sees the clean config they're about to edit.
+  // Must happen AFTER state.conversationId is set so the debounced auto-save
+  // (triggered when the user starts typing) targets the new conversation.
+  resetSidebarToDefaults();
+
+  // Focus the system prompt so they can start authoring the bot immediately.
+  els.systemPrompt.focus();
+}
+
+function resetSidebarToDefaults() {
+  els.systemPrompt.value = "";
+  els.temperature.value = DEFAULTS.temperature;
+  els.maxTokens.value   = DEFAULTS.max_tokens;
+  els.topP.value        = DEFAULTS.top_p;
+  els.topK.value        = DEFAULTS.top_k;
+  els.think.value       = "";
+  els.maxThinking.value = "";
+  syncParamDisplay();
+  saveSettings();   // update localStorage; do NOT trigger scheduleSaveToConversation
+                    // (the server already has these defaults from the just-created conv)
 }
 
 // ---------- Rendering ----------
@@ -536,36 +567,40 @@ async function sendMessage(text) {
 }
 
 // ---------- API code modal ----------
-// Each conversation is its own addressable "microservice function" on the server.
-// The saved model + system prompt + sampling params are stored with the conversation,
-// so the snippet just points at /api/conversations/{id}/chat/stream and sends a message.
-function buildCodeSnippet(tab) {
+// Each conversation is a saved microservice: its model, system prompt, and
+// sampling params are locked server-side. The snippet only needs to supply
+// the message.
+function buildCodeSnippet(tab, mode) {
   const base = window.location.origin;
   const convId = state.conversationId;
   if (!convId) {
     return "# Send a message first to create a conversation.\n# Each chat becomes its own configured API endpoint.";
   }
-  const url = `${base}/api/conversations/${convId}/chat/stream`;
-  const urlSync = `${base}/api/conversations/${convId}/chat`;
   const msg = "Hello!";
+  const streamUrl = `${base}/api/conversations/${convId}/chat/stream`;
+  const syncUrl = `${base}/api/conversations/${convId}/chat`;
+  const header = `# Chat #${convId}. Config (model, system prompt, temperature, max_tokens,\n# top_p, top_k, thinking) is set in the GUI — this call only supplies the message.`;
 
+  // ---- cURL ----
   if (tab === "curl") {
-    return `# Streaming (SSE). All behavior is locked to what you saved in the GUI
-# for chat #${convId} — model, system prompt, temperature, max_tokens,
-# top_p, top_k, thinking level. The only thing you send is the message.
-curl -N -X POST ${url} \\
+    if (mode === "stream") {
+      return `${header}
+curl -N -X POST ${streamUrl} \\
   -H "Content-Type: application/json" \\
-  -d '{"message": "${msg}"}'
-
-# Non-streaming equivalent:
-# curl -X POST ${urlSync} -H "Content-Type: application/json" -d '{"message":"${msg}"}'`;
+  -d '{"message": "${msg}"}'`;
+    }
+    return `${header}
+curl -X POST ${syncUrl} \\
+  -H "Content-Type: application/json" \\
+  -d '{"message": "${msg}"}'`;
   }
-  if (tab === "python") {
-    return `import httpx, json
 
-# Chat #${convId} is a saved bot. Its config (model, system prompt, params)
-# is set exclusively in the GUI — this call just supplies the message.
-URL = "${url}"
+  // ---- Python ----
+  if (tab === "python") {
+    if (mode === "stream") {
+      return `import httpx, json
+
+URL = "${streamUrl}"
 
 with httpx.stream("POST", URL, json={"message": "${msg}"}, timeout=None) as r:
     for line in r.iter_lines():
@@ -574,15 +609,20 @@ with httpx.stream("POST", URL, json={"message": "${msg}"}, timeout=None) as r:
             if "chunk" in data:
                 print(data["chunk"], end="", flush=True)
             if data.get("end"):
-                break
+                break`;
+    }
+    return `import httpx
 
-# Non-streaming:
-# httpx.post("${urlSync}", json={"message": "${msg}"}).json()["response"]`;
+URL = "${syncUrl}"
+
+response = httpx.post(URL, json={"message": "${msg}"}, timeout=120).json()
+print(response["response"])`;
   }
+
+  // ---- JavaScript ----
   if (tab === "js") {
-    return `// Chat #${convId} is a saved bot. Its config (model, system prompt, params)
-// is set exclusively in the GUI — this call just supplies the message.
-const res = await fetch("${url}", {
+    if (mode === "stream") {
+      return `const res = await fetch("${streamUrl}", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ message: "${msg}" }),
@@ -603,14 +643,15 @@ while (true) {
     if (data.chunk) process.stdout.write(data.chunk);
     if (data.end) return;
   }
-}
+}`;
+    }
+    return `const { response } = await fetch("${syncUrl}", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ message: "${msg}" }),
+}).then(r => r.json());
 
-// Non-streaming:
-// const { response } = await fetch("${urlSync}", {
-//   method: "POST",
-//   headers: { "Content-Type": "application/json" },
-//   body: JSON.stringify({ message: "${msg}" })
-// }).then(r => r.json());`;
+console.log(response);`;
   }
   return "";
 }
@@ -619,9 +660,9 @@ const LANG_FOR_TAB = { curl: "bash", python: "python", js: "javascript" };
 
 function paintSnippet() {
   const tab = state.activeTab;
-  const code = buildCodeSnippet(tab);
+  const mode = state.activeMode;
+  const code = buildCodeSnippet(tab, mode);
   els.codeSnippet.textContent = code;
-  // Reset highlight.js "already highlighted" flag and language class.
   els.codeSnippet.removeAttribute("data-highlighted");
   els.codeSnippet.className = "hljs language-" + (LANG_FOR_TAB[tab] || "plaintext");
   if (window.hljs && typeof hljs.highlightElement === "function") {
@@ -643,11 +684,19 @@ function bindModal() {
   els.apiCodeBtn.addEventListener("click", openModal);
   els.modalClose.addEventListener("click", closeModal);
   els.modalBackdrop.addEventListener("click", e => { if (e.target === els.modalBackdrop) closeModal(); });
-  els.tabs.forEach(tab => {
+  els.langTabs.forEach(tab => {
     tab.addEventListener("click", () => {
-      els.tabs.forEach(t => t.classList.remove("active"));
+      els.langTabs.forEach(t => t.classList.remove("active"));
       tab.classList.add("active");
       state.activeTab = tab.dataset.tab;
+      paintSnippet();
+    });
+  });
+  els.modeTabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+      els.modeTabs.forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      state.activeMode = tab.dataset.mode;
       paintSnippet();
     });
   });
