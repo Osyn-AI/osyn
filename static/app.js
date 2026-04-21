@@ -550,20 +550,21 @@ function buildCodeSnippet(tab) {
   const msg = "Hello!";
 
   if (tab === "curl") {
-    return `# Streaming (SSE) — uses the saved model, system prompt & params for chat #${convId}
+    return `# Streaming (SSE). All behavior is locked to what you saved in the GUI
+# for chat #${convId} — model, system prompt, temperature, max_tokens,
+# top_p, top_k, thinking level. The only thing you send is the message.
 curl -N -X POST ${url} \\
   -H "Content-Type: application/json" \\
   -d '{"message": "${msg}"}'
 
 # Non-streaming equivalent:
-# curl -X POST ${urlSync} -H "Content-Type: application/json" -d '{"message":"${msg}"}'
-
-# Any field is overridable per-call, e.g. {"message":"...","temperature":0.2,"persist":true}`;
+# curl -X POST ${urlSync} -H "Content-Type: application/json" -d '{"message":"${msg}"}'`;
   }
   if (tab === "python") {
     return `import httpx, json
 
-# Each conversation is a saved function on the server — just send a message.
+# Chat #${convId} is a saved bot. Its config (model, system prompt, params)
+# is set exclusively in the GUI — this call just supplies the message.
 URL = "${url}"
 
 with httpx.stream("POST", URL, json={"message": "${msg}"}, timeout=None) as r:
@@ -575,11 +576,12 @@ with httpx.stream("POST", URL, json={"message": "${msg}"}, timeout=None) as r:
             if data.get("end"):
                 break
 
-# Non-streaming: httpx.post("${urlSync}", json={"message": "${msg}"}).json()["response"]
-# Override anything: {"message": "...", "temperature": 0.2, "persist": True}`;
+# Non-streaming:
+# httpx.post("${urlSync}", json={"message": "${msg}"}).json()["response"]`;
   }
   if (tab === "js") {
-    return `// Streaming call to saved chat #${convId}
+    return `// Chat #${convId} is a saved bot. Its config (model, system prompt, params)
+// is set exclusively in the GUI — this call just supplies the message.
 const res = await fetch("${url}", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -604,8 +606,9 @@ while (true) {
 }
 
 // Non-streaming:
-// const { response } = await fetch("${urlSync}", { method:"POST",
-//   headers:{"Content-Type":"application/json"},
+// const { response } = await fetch("${urlSync}", {
+//   method: "POST",
+//   headers: { "Content-Type": "application/json" },
 //   body: JSON.stringify({ message: "${msg}" })
 // }).then(r => r.json());`;
   }

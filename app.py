@@ -7,7 +7,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 import db
 import llm
@@ -72,19 +72,17 @@ class ConversationUpdate(BaseModel):
 
 
 class ConversationChatRequest(BaseModel):
-    """Body for POST /api/conversations/{id}/chat — each chat acts like a saved API function."""
+    """Body for POST /api/conversations/{id}/chat.
+
+    The bot's config (model, system prompt, sampling params, thinking level) is
+    locked to what the GUI saved. API callers only supply the conversation
+    content — everything else is rejected.
+    """
+    model_config = ConfigDict(extra="forbid")
+
     message: str | None = None
     messages: list[Message] | None = None
-    # Optional overrides of the saved conversation config:
-    system_prompt: str | None = None
-    model: str | None = None
-    temperature: float | None = Field(None, ge=0.0, le=2.0)
-    max_tokens: int | None = Field(None, ge=1, le=32000)
-    top_p: float | None = Field(None, ge=0.0, le=1.0)
-    top_k: int | None = Field(None, ge=1, le=500)
-    think: ThinkValue = None
-    max_thinking_tokens: int | None = Field(None, ge=1, le=100000)
-    persist: bool = False  # append this turn to the saved conversation history
+    persist: bool = False  # save this turn to the conversation's display log
 
 
 # ---------- Models (Ollama) ----------
@@ -266,17 +264,17 @@ def _resolve_conversation_chat(conv_id: int, req: ConversationChatRequest) -> tu
     if (req.message is None) == (req.messages is None):
         raise HTTPException(400, "Provide exactly one of 'message' (string) or 'messages' (array).")
 
-    # Resolve effective config: request overrides win, else conversation saved values, else defaults.
+    # Config is locked to whatever the GUI saved. No per-request overrides.
     saved = conv.get("params", {}) or {}
     effective = {
-        "model": req.model or conv["model"],
-        "system_prompt": req.system_prompt if req.system_prompt is not None else conv["system_prompt"],
-        "temperature": req.temperature if req.temperature is not None else saved.get("temperature", 0.7),
-        "max_tokens": req.max_tokens if req.max_tokens is not None else saved.get("max_tokens", 2048),
-        "top_p": req.top_p if req.top_p is not None else saved.get("top_p", 0.9),
-        "top_k": req.top_k if req.top_k is not None else saved.get("top_k", 40),
-        "think": req.think if req.think is not None else saved.get("think"),
-        "max_thinking_tokens": req.max_thinking_tokens if req.max_thinking_tokens is not None else saved.get("max_thinking_tokens"),
+        "model": conv["model"],
+        "system_prompt": conv["system_prompt"],
+        "temperature": saved.get("temperature", 0.7),
+        "max_tokens": saved.get("max_tokens", 2048),
+        "top_p": saved.get("top_p", 0.9),
+        "top_k": saved.get("top_k", 40),
+        "think": saved.get("think"),
+        "max_thinking_tokens": saved.get("max_thinking_tokens"),
     }
 
     # Build the message list to send to Ollama.
