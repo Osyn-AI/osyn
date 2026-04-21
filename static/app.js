@@ -43,6 +43,7 @@ const els = {
   copyCode: document.getElementById("copy-code"),
   langTabs: document.querySelectorAll('.tabs[data-group="lang"] .tab'),
   modeTabs: document.querySelectorAll('.tabs[data-group="mode"] .tab'),
+  styleTabs: document.querySelectorAll('.tabs[data-group="style"] .tab'),
 };
 
 const DEFAULTS = { temperature: 0.7, max_tokens: 2048, top_p: 0.9, top_k: 40 };
@@ -62,6 +63,7 @@ let state = {
   messages: [], // [{role, content, params?}]
   activeTab: "curl",       // "curl" | "python" | "js"
   activeMode: "stream",    // "stream" | "sync"
+  activeStyle: "native",   // "native" | "openai"
   abortController: null,
 };
 
@@ -577,13 +579,18 @@ async function sendMessage(text) {
 // ---------- API code modal ----------
 // Each conversation is a saved microservice: its model, system prompt, and
 // sampling params are locked server-side. The snippet only needs to supply
-// the message.
-function buildCodeSnippet(tab, mode) {
+// the message (or the messages list, for multi-turn).
+function buildCodeSnippet(tab, mode, style) {
   const base = window.location.origin;
   const convId = state.conversationId;
   if (!convId) {
     return "# Send a message first to create a conversation.\n# Each chat becomes its own configured API endpoint.";
   }
+  if (style === "openai") return buildOpenAISnippet(tab, mode, base, convId);
+  return buildNativeSnippet(tab, mode, base, convId);
+}
+
+function buildNativeSnippet(tab, mode, base, convId) {
   const msg = "Hello!";
   const streamUrl = `${base}/api/conversations/${convId}/chat/stream`;
   const syncUrl = `${base}/api/conversations/${convId}/chat`;
@@ -664,12 +671,116 @@ console.log(response);`;
   return "";
 }
 
+// OpenAI-compatible snippets — caller uses the OpenAI SDK (or the raw HTTP
+// schema) pointed at MiniClosedAI's /v1 endpoint. The conversation ID goes
+// in the `model` field; any caller-supplied sampling params are ignored by
+// the server in favor of the bot's GUI-saved config.
+function buildOpenAISnippet(tab, mode, base, convId) {
+  const msg = "Hello!";
+  const url = `${base}/v1/chat/completions`;
+  const header = `# OpenAI-compatible. Use the conversation ID as 'model'. The bot's saved
+# config (model, system prompt, temperature, etc.) is the source of truth —
+# any caller-provided sampling params are ignored by the server.`;
+
+  // ---- cURL ----
+  if (tab === "curl") {
+    if (mode === "stream") {
+      return `${header}
+curl -N -X POST ${url} \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${convId}",
+    "messages": [{"role":"user","content":"${msg}"}],
+    "stream": true
+  }'`;
+    }
+    return `${header}
+curl -X POST ${url} \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${convId}",
+    "messages": [{"role":"user","content":"${msg}"}]
+  }'`;
+  }
+
+  // ---- Python (openai SDK) ----
+  if (tab === "python") {
+    if (mode === "stream") {
+      return `# pip install openai
+from openai import OpenAI
+
+# Drop-in for OpenAI: point base_url at MiniClosedAI, use chat id as 'model'.
+client = OpenAI(base_url="${base}/v1", api_key="not-required")
+
+stream = client.chat.completions.create(
+    model="${convId}",
+    messages=[{"role": "user", "content": "${msg}"}],
+    stream=True,
+)
+for chunk in stream:
+    delta = chunk.choices[0].delta.content
+    if delta:
+        print(delta, end="", flush=True)`;
+    }
+    return `# pip install openai
+from openai import OpenAI
+
+client = OpenAI(base_url="${base}/v1", api_key="not-required")
+
+response = client.chat.completions.create(
+    model="${convId}",
+    messages=[{"role": "user", "content": "${msg}"}],
+)
+print(response.choices[0].message.content)`;
+  }
+
+  // ---- JavaScript (openai SDK) ----
+  if (tab === "js") {
+    if (mode === "stream") {
+      return `// npm install openai
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "${base}/v1",
+  apiKey: "not-required",
+});
+
+const stream = await client.chat.completions.create({
+  model: "${convId}",
+  messages: [{ role: "user", content: "${msg}" }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  const delta = chunk.choices[0]?.delta?.content;
+  if (delta) process.stdout.write(delta);
+}`;
+    }
+    return `// npm install openai
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "${base}/v1",
+  apiKey: "not-required",
+});
+
+const response = await client.chat.completions.create({
+  model: "${convId}",
+  messages: [{ role: "user", content: "${msg}" }],
+});
+
+console.log(response.choices[0].message.content);`;
+  }
+  return "";
+}
+
 const LANG_FOR_TAB = { curl: "bash", python: "python", js: "javascript" };
 
 function paintSnippet() {
   const tab = state.activeTab;
   const mode = state.activeMode;
-  const code = buildCodeSnippet(tab, mode);
+  const style = state.activeStyle;
+  const code = buildCodeSnippet(tab, mode, style);
   els.codeSnippet.textContent = code;
   els.codeSnippet.removeAttribute("data-highlighted");
   els.codeSnippet.className = "hljs language-" + (LANG_FOR_TAB[tab] || "plaintext");
@@ -705,6 +816,14 @@ function bindModal() {
       els.modeTabs.forEach(t => t.classList.remove("active"));
       tab.classList.add("active");
       state.activeMode = tab.dataset.mode;
+      paintSnippet();
+    });
+  });
+  els.styleTabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+      els.styleTabs.forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      state.activeStyle = tab.dataset.style;
       paintSnippet();
     });
   });

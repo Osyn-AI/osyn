@@ -1,5 +1,6 @@
 """MiniClosedAI — FastAPI app exposing a minimal Ollama playground."""
 import json
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -434,6 +435,190 @@ async def api_chat_stream(req: ChatRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------- OpenAI-compatible endpoint ----------
+# Lets any OpenAI SDK (Python `openai`, `@openai/openai`, etc.) talk to this
+# app by setting base_url to http://<host>:8095/v1 and using the conversation
+# ID as the `model` field. The bot's GUI-saved config (system prompt, model,
+# sampling params) is the source of truth — any caller-supplied temperature,
+# max_tokens, etc. are tolerated but ignored, matching the native endpoint.
+
+class OAIMessage(BaseModel):
+    role: str
+    content: str
+
+
+class OAICompletionRequest(BaseModel):
+    """Minimal OpenAI /v1/chat/completions request shape.
+
+    `extra="allow"` lets us tolerate fields we don't use (temperature, top_p,
+    presence_penalty, logit_bias, response_format, …) without failing the
+    request. Those fields are silently ignored — the bot config is locked.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    model: str
+    messages: list[OAIMessage]
+    stream: bool = False
+
+
+def _conv_id_from_openai_model(model_field: str) -> int:
+    """Accept the `model` field in any of: "12", "conv-12", "bot-12", "miniclosed/12"."""
+    raw = model_field.strip()
+    for prefix in ("conv-", "bot-", "miniclosed/"):
+        if raw.startswith(prefix):
+            raw = raw[len(prefix):]
+            break
+    try:
+        return int(raw)
+    except ValueError:
+        raise HTTPException(
+            400,
+            f"OpenAI-compat endpoint expects `model` to be a MiniClosedAI "
+            f"conversation ID (e.g. \"12\" or \"conv-12\"); got {model_field!r}",
+        )
+
+
+def _load_conv_for_openai(conv_id: int) -> dict:
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ?", (conv_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, f"Conversation {conv_id} not found")
+    return db.row_to_dict(row)
+
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(req: OAICompletionRequest):
+    conv_id = _conv_id_from_openai_model(req.model)
+    conv = _load_conv_for_openai(conv_id)
+
+    saved = conv.get("params", {}) or {}
+    effective = {
+        "model": conv["model"],
+        "temperature": saved.get("temperature", 0.7),
+        "max_tokens": saved.get("max_tokens", 2048),
+        "top_p": saved.get("top_p", 0.9),
+        "top_k": saved.get("top_k", 40),
+        "think": saved.get("think"),
+    }
+
+    # Bot's system prompt wins. Drop any system messages the caller sent.
+    ollama_messages = [{"role": "system", "content": conv["system_prompt"]}]
+    ollama_messages.extend(
+        {"role": m.role, "content": m.content}
+        for m in req.messages
+        if m.role != "system"
+    )
+
+    completion_id = f"chatcmpl-mca-{conv_id}-{int(time.time() * 1000)}"
+    created = int(time.time())
+
+    if req.stream:
+        async def event_stream():
+            sent_any = False
+            try:
+                async for ev in llm.chat_stream(
+                    effective["model"], ollama_messages,
+                    temperature=effective["temperature"], max_tokens=effective["max_tokens"],
+                    top_p=effective["top_p"], top_k=effective["top_k"],
+                    think=effective["think"],
+                ):
+                    if "content" not in ev:
+                        continue
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": effective["model"],
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": ev["content"]} if not sent_any
+                                     else {"content": ev["content"]},
+                            "finish_reason": None,
+                        }],
+                    }
+                    # First chunk conventionally also sets role:"assistant" in delta.
+                    if not sent_any:
+                        chunk["choices"][0]["delta"]["role"] = "assistant"
+                    sent_any = True
+                    yield f"data: {json.dumps(chunk)}\n\n"
+            except httpx.ConnectError:
+                err = {"error": {"message": "Cannot connect to Ollama at localhost:11434",
+                                  "type": "upstream_unavailable"}}
+                yield f"data: {json.dumps(err)}\n\n"
+                return
+            except Exception as e:
+                err = {"error": {"message": str(e), "type": "server_error"}}
+                yield f"data: {json.dumps(err)}\n\n"
+                return
+
+            final = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": effective["model"],
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+            yield f"data: {json.dumps(final)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # Non-streaming
+    try:
+        text = await llm.chat(
+            effective["model"], ollama_messages,
+            temperature=effective["temperature"], max_tokens=effective["max_tokens"],
+            top_p=effective["top_p"], top_k=effective["top_k"],
+            think=effective["think"],
+        )
+    except httpx.ConnectError:
+        raise HTTPException(503, "Cannot connect to Ollama at localhost:11434")
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+    return {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": created,
+        "model": effective["model"],
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": text},
+            "finish_reason": "stop",
+        }],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+
+
+@app.get("/v1/models")
+async def openai_list_models():
+    """OpenAI-compatible model listing — each MiniClosedAI conversation appears as a model."""
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, title, model, created_at FROM conversations ORDER BY id"
+        ).fetchall()
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": str(r["id"]),
+                "object": "model",
+                "created": 0,
+                "owned_by": "miniclosedai",
+                "title": r["title"],
+                "backend_model": r["model"],
+            }
+            for r in rows
+        ],
+    }
 
 
 # ---------- Static / UI ----------
