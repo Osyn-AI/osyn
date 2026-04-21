@@ -4,6 +4,12 @@ A tiny, 100%-local LLM playground. Chat with small Ollama models (1B–10B param
 
 Built with **FastAPI** (3 Python deps), vanilla JS, and SQLite. Runs on a laptop.
 
+<p align="center">
+  <img src="miniclsedai1.png"
+       alt="MiniClosedAI — a saved Pikachu bot responding to a message, with system prompt and parameters visible in the sidebar"
+       width="820">
+</p>
+
 ![stack](https://img.shields.io/badge/FastAPI-0.110+-009688) ![Ollama](https://img.shields.io/badge/Ollama-local-000000) ![license](https://img.shields.io/badge/license-MIT-blue)
 
 > The defining idea: **each saved conversation is an addressable microservice.** You craft a system prompt + sampling params once in the UI, and that chat becomes a stable URL you can call from anything that speaks HTTP — including any OpenAI SDK.
