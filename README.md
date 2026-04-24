@@ -39,6 +39,13 @@ Built with **FastAPI** (3 Python deps), vanilla JS, and SQLite. Runs on a laptop
   <br><em>Every chat doubles as a fine-tuning dataset. The download icon in the header exports the conversation as a two-column <code>input,output</code> CSV — edited assistant responses become the ideal targets, ready for SFT. See <a href="#curating-fine-tuning-data">Curating fine-tuning data</a>.</em>
 </p>
 
+<p align="center">
+  <img src="miniclosedai6.png"
+       alt="MiniClosedAI Settings page with three registered LLM endpoints: Ollama (built-in) at localhost:11434 showing 23 reachable models, LM Studio at 192.168.0.110:1234/v1 with 7 models and an API key set, and Bonsai at localhost:8080/v1 with 1 model — each card has Edit and (for non-built-in) Delete buttons"
+       width="820">
+  <br><em>Settings → LLM Endpoints. Register as many backends as you want: the built-in Ollama, an LM Studio instance on your LAN, and PrismML's 1-bit Bonsai server all coexist. Each card shows its kind, base URL, API-key status, and a live reachability count. Models from every reachable endpoint merge into one grouped dropdown on the Dashboard, OpenWebUI-style. See <a href="#connecting-lm-studio-and-other-openai-compatible-endpoints">Connecting LM Studio and other endpoints</a> and <a href="#adding-bonsai-prismmls-1-bit-8b--step-by-step">Adding Bonsai</a>.</em>
+</p>
+
 ![stack](https://img.shields.io/badge/FastAPI-0.110+-009688) ![Ollama](https://img.shields.io/badge/Ollama-local-000000) ![license](https://img.shields.io/badge/license-MIT-blue)
 
 > The defining idea: **each saved conversation is an addressable microservice.** You craft a system prompt + sampling params once in the UI, and that chat becomes a stable URL you can call from anything that speaks HTTP — including any OpenAI SDK.
@@ -927,8 +934,11 @@ Small local models are *capable* but *literal*. A few rules of thumb:
 | `deepseek-r1:1.5b` | ~1.1 GB | `ollama pull deepseek-r1:1.5b` | Tiny reasoner |
 | `qwen3:8b` | ~5.2 GB | `ollama pull qwen3:8b` | Reasoning + strong instruction-following |
 | `gpt-oss:20b` | ~14 GB | `ollama pull gpt-oss:20b` | Largest listed; supports `think` effort levels (low/medium/high) |
+| `Bonsai-8B.gguf` *(1-bit)* | **~1.15 GB** | [Bonsai-demo](https://github.com/PrismML-Eng/Bonsai-demo) → `./setup.sh` → `./scripts/start_llama_server.sh` | **Fast microservice bot.** Extreme-quantization 1-bit 8B from PrismML, served via llama.cpp on `:8080`. Tiny footprint + high-throughput inference make it the natural pick for a per-conversation microservice you plan to hammer from production code. See [Adding Bonsai](#adding-bonsai-prismmls-1-bit-8b--step-by-step). |
 
-The UI reads `ollama list` at startup and auto-populates the model dropdown. Cloud proxies and embedding-only models are filtered out.
+The UI reads `ollama list` at startup and auto-populates the model dropdown for the built-in Ollama backend. Cloud proxies and embedding-only models are filtered out. Bonsai and any other OpenAI-compat endpoint you register in Settings add their own optgroups on top.
+
+**Picking a model for an API-heavy microservice bot:** if the conversation is a callable endpoint that downstream code will hit a lot (ticket routing, JSON extraction, sentiment, lead scoring), prefer small + fast over large + smart. Bonsai-8B (1-bit, ~1.15 GB, GPU-accelerated on port 8080) and `llama3.2:3b` or `gemma2:2b` on Ollama are the three strongest low-latency candidates today. Save the bigger reasoning models for chats where a human actually waits for each turn.
 
 ---
 
