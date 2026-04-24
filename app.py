@@ -575,7 +575,12 @@ def api_export_conversation_csv(conv_id: int):
     while i < len(messages) - 1:
         a, b = messages[i], messages[i + 1]
         if a.get("role") == "user" and b.get("role") == "assistant":
-            writer.writerow([a.get("content", ""), b.get("content", "")])
+            # rstrip both sides — trailing whitespace in training data teaches
+            # the fine-tuned model to emit trailing whitespace too.
+            writer.writerow([
+                (a.get("content", "") or "").strip(),
+                (b.get("content", "") or "").strip(),
+            ])
             i += 2
         else:
             i += 1
@@ -623,7 +628,10 @@ def _persist_turn(req: ChatRequest, assistant_text: str, backend: dict) -> None:
             return
         existing = json.loads(row["messages"] or "[]")
         existing.append({"role": last_user.role, "content": last_user.content, "params": snapshot})
-        existing.append({"role": "assistant", "content": assistant_text, "params": snapshot})
+        # Strip trailing whitespace from model output — it's almost always
+        # junk padding the model appends, and it pollutes both the edit
+        # textarea and the CSV export (bad training data).
+        existing.append({"role": "assistant", "content": assistant_text.strip(), "params": snapshot})
         conn.execute(
             "UPDATE conversations SET messages = ?, model = ?, updated_at = datetime('now') WHERE id = ?",
             (json.dumps(existing), req.model, req.conversation_id),
@@ -719,7 +727,7 @@ def _persist_conv_chat_turn(
         existing = json.loads(row["messages"] or "[]")
         for m in user_msgs:
             existing.append({"role": m["role"], "content": m["content"], "params": snapshot})
-        existing.append({"role": "assistant", "content": assistant_text, "params": snapshot})
+        existing.append({"role": "assistant", "content": assistant_text.strip(), "params": snapshot})
         conn.execute(
             "UPDATE conversations SET messages = ?, updated_at = datetime('now') WHERE id = ?",
             (json.dumps(existing), conv_id),
@@ -1044,12 +1052,29 @@ async def openai_list_models():
 
 # ---------- Static / UI ----------
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class _NoCacheStatics(StaticFiles):
+    """StaticFiles subclass that disables browser caching.
+
+    This is a local dev tool — the cost of refetching app.js / style.css
+    every page load is zero, and silent stale-cache bugs are expensive
+    (user spent time earlier hitting exactly that).
+    """
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+
+app.mount("/static", _NoCacheStatics(directory=STATIC_DIR), name="static")
 
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    resp = FileResponse(STATIC_DIR / "index.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
 
 
 if __name__ == "__main__":

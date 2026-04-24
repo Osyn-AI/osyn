@@ -543,21 +543,22 @@ function renderMessage(m, index) {
   const div = document.createElement("div");
   div.className = `msg ${m.role}`;
   if (index != null) div.dataset.index = String(index);
+  let body;
   if (m.role === "user") {
-    const body = document.createElement("div");
+    body = document.createElement("div");
     body.className = "msg-body";
     body.textContent = m.content;
     div.appendChild(body);
   } else {
     // Wrap assistant content in a single child so the flex avatar lays out correctly.
-    const body = document.createElement("div");
+    body = document.createElement("div");
     body.className = "msg-body";
     body.innerHTML = render(m.content);
     div.appendChild(body);
     highlightCodeBlocks(body);
     if (m.params) appendParamsBadge(body, m.params);
   }
-  if (m.edited) appendEditedBadge(div, m);
+  if (m.edited) appendEditedBadge(body, m);
   // Pencil button — assistant turns only. Disabled while a stream is active
   // so you can't clobber a message that's still growing.
   if (index != null && m.role === "assistant") _appendEditButton(div, index);
@@ -629,8 +630,12 @@ function openInlineEditor(msgEl, index) {
   wrap.className = "msg-edit-area";
 
   const textarea = document.createElement("textarea");
-  textarea.value = m.content || "";
-  textarea.rows = Math.min(24, Math.max(3, (m.content || "").split("\n").length + 1));
+  // Strip whitespace at BOTH ends — LM Studio + Qwen3 often emit a leading
+  // \n\n when thinking ends and the answer starts, plus trailing \n\n on
+  // completion. Both pollute the editor and the CSV export.
+  const initial = (m.content || "").replace(/^\s+|\s+$/g, "");
+  textarea.value = initial;
+  textarea.rows = Math.min(24, Math.max(3, initial.split("\n").length + 1));
   wrap.appendChild(textarea);
 
   const actions = document.createElement("div");
@@ -711,20 +716,21 @@ function _rerenderMessageInPlace(msgEl, m, index) {
   // Wipe children, reuse the existing .msg element so the outer layout / data-
   // index / flex position stay intact.
   msgEl.innerHTML = "";
+  let body;
   if (m.role === "user") {
-    const body = document.createElement("div");
+    body = document.createElement("div");
     body.className = "msg-body";
     body.textContent = m.content;
     msgEl.appendChild(body);
   } else {
-    const body = document.createElement("div");
+    body = document.createElement("div");
     body.className = "msg-body";
     body.innerHTML = render(m.content);
     msgEl.appendChild(body);
     highlightCodeBlocks(body);
     if (m.params) appendParamsBadge(body, m.params);
   }
-  if (m.edited) appendEditedBadge(msgEl, m);
+  if (m.edited) appendEditedBadge(body, m);
   if (m.role === "assistant") _appendEditButton(msgEl, index);
 }
 
@@ -874,6 +880,12 @@ async function sendMessage(text) {
     }
 
     state.messages.push({ role: "assistant", content: assistantText, params: { model, ...params } });
+    // Now that streaming is done and the message is in state, attach the edit
+    // pencil — the placeholder was rendered without an index since we didn't
+    // know the final message count yet.
+    const finalIndex = state.messages.length - 1;
+    assistantEl.dataset.index = String(finalIndex);
+    _appendEditButton(assistantEl, finalIndex);
     els.sendBtn.disabled = false;
     els.input.disabled = false;
     els.input.focus();
