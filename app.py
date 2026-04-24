@@ -493,6 +493,61 @@ def api_clear_conversation(conv_id: int):
     return {"ok": True}
 
 
+class MessageEditRequest(BaseModel):
+    """Body for PATCH /api/conversations/{id}/messages/{index}.
+
+    Only the message content is editable. Empty string is allowed — that's a
+    user choice (e.g. deleting the content of a placeholder turn).
+    """
+    model_config = ConfigDict(extra="forbid")
+    content: str
+
+
+@app.patch("/api/conversations/{conv_id}/messages/{index}")
+def api_edit_message(conv_id: int, index: int, data: MessageEditRequest):
+    """Edit a single stored message in place.
+
+    Designed for fine-tuning data curation: overwrite an unsatisfying
+    assistant response with the ideal one. The first edit preserves the
+    pristine original in `original_content` so you can still audit or export
+    it as the "rejected" side of a DPO pair later. Subsequent edits update
+    `content` only — `original_content` stays anchored to whatever the model
+    first produced.
+    """
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT messages FROM conversations WHERE id = ?", (conv_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Conversation not found")
+
+        messages = json.loads(row["messages"] or "[]")
+        if index < 0 or index >= len(messages):
+            raise HTTPException(
+                404,
+                f"Message index {index} out of range (conversation has {len(messages)} messages)",
+            )
+
+        msg = messages[index]
+        if not msg.get("edited"):
+            # First edit: pin the original so later edits can't overwrite it.
+            msg["original_content"] = msg.get("content", "")
+        msg["content"] = data.content
+        msg["edited"] = True
+        msg["edited_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        messages[index] = msg
+
+        conn.execute(
+            "UPDATE conversations SET messages = ?, updated_at = datetime('now') WHERE id = ?",
+            (json.dumps(messages), conv_id),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM conversations WHERE id = ?", (conv_id,)
+        ).fetchone()
+    return db.row_to_dict(updated)
+
+
 # ---------- Chat (legacy generic endpoint — ChatRequest carries everything) ----------
 
 def _build_messages(req: ChatRequest) -> list[dict]:
