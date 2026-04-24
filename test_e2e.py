@@ -80,10 +80,17 @@ class _FakeServer:
 
 
 class FakeOllama(_FakeServer):
-    """Speaks enough of Ollama's API to satisfy MiniClosedAI's Ollama adapter."""
+    """Speaks enough of Ollama's API to satisfy MiniClosedAI's Ollama adapter.
+
+    Set `instance.dirty = True` before a stream to emit leading + trailing
+    whitespace in content chunks — used by the persist-strip test to prove
+    the server cleans up model output before writing it to the DB.
+    """
+    dirty = False
 
     def _handler_class(self):
         captured = self.captured
+        outer = self
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a, **kw): pass  # silent
@@ -111,11 +118,13 @@ class FakeOllama(_FakeServer):
                     self.send_header("Content-Type", "application/x-ndjson")
                     self.end_headers()
                     # Emit a mini NDJSON stream: one thinking chunk then content.
+                    first = "\n\nHello " if outer.dirty else "Hello "
+                    last = "!\n\n\n" if outer.dirty else "!"
                     frames = [
                         {"message": {"role": "assistant", "thinking": "Let me think..."}, "done": False},
-                        {"message": {"role": "assistant", "content": "Hello "}, "done": False},
+                        {"message": {"role": "assistant", "content": first}, "done": False},
                         {"message": {"role": "assistant", "content": "world"}, "done": False},
-                        {"message": {"role": "assistant", "content": "!"}, "done": True},
+                        {"message": {"role": "assistant", "content": last}, "done": True},
                     ]
                     for f in frames:
                         self.wfile.write((json.dumps(f) + "\n").encode())
@@ -841,6 +850,78 @@ def _():
 def _():
     r = client.get("/api/conversations/999999/export.csv")
     assert r.status_code == 404, r.text
+
+
+@test("persist strip: model output with leading+trailing whitespace lands clean in DB")
+def _():
+    """Qwen3 / LM Studio emit a leading \\n\\n between (hidden) thinking and the
+    answer, and often trailing \\n\\n at completion. The persist path must
+    .strip() both ends — otherwise the edit textarea shows junk empty lines
+    and the CSV export carries them into the SFT target.
+    """
+    _reseed_builtin_to_fake_ollama()
+    fake_ollama.dirty = True
+    try:
+        c = client.post("/api/conversations", json={
+            "title": "persist-strip", "model": "ollama-a:3b", "backend_id": 1,
+        }).json()
+        with client.stream(
+            "POST", f"/api/conversations/{c['id']}/chat/stream",
+            json={"message": "hi", "persist": True},
+        ) as r:
+            for _ in r.iter_bytes():
+                pass
+
+        stored = client.get(f"/api/conversations/{c['id']}").json()
+        assert len(stored["messages"]) >= 2
+        content = stored["messages"][1]["content"]
+        # FakeOllama's dirty frames produce "\n\nHello world!\n\n\n".
+        # After rstrip/strip on persist it must be exactly "Hello world!".
+        assert content == "Hello world!", f"unstripped content: {content!r}"
+        client.delete(f"/api/conversations/{c['id']}")
+    finally:
+        fake_ollama.dirty = False
+
+
+@test("export CSV: strips leading/trailing whitespace on already-stored messages")
+def _():
+    """Belt-and-suspenders: legacy conversations may have been stored before
+    the persist-strip fix. The export endpoint must still emit clean cells.
+    """
+    cid = _seed_conv_with_turn("csv-strip")
+    try:
+        # Round-trip a dirty payload via PATCH (which intentionally does NOT
+        # strip — it preserves whatever the user typed). Then verify export
+        # strips it on the way out.
+        dirty = "  \n\nRewritten answer.\n\n  "
+        client.patch(f"/api/conversations/{cid}/messages/1", json={"content": dirty})
+
+        r = client.get(f"/api/conversations/{cid}/export.csv")
+        assert r.status_code == 200, r.text
+        import csv as _csv, io as _io
+        rows = list(_csv.reader(_io.StringIO(r.text)))
+        assert rows[0] == ["input", "output"]
+        assert rows[1][1] == "Rewritten answer.", f"unstripped output cell: {rows[1][1]!r}"
+    finally:
+        client.delete(f"/api/conversations/{cid}")
+
+
+@test("static: no-cache headers on /static/* so stale JS can't bite users")
+def _():
+    """We hit a real time-sink debugging the edit-message feature when Chrome
+    kept serving cached app.js. _NoCacheStatics sets strict no-cache headers;
+    this is the regression guard.
+    """
+    r = client.get("/static/app.js")
+    assert r.status_code == 200
+    cc = r.headers.get("cache-control", "").lower()
+    assert "no-cache" in cc, f"missing no-cache: {cc!r}"
+    assert "no-store" in cc, f"missing no-store: {cc!r}"
+
+    # Also check the app shell at /
+    r2 = client.get("/")
+    cc2 = r2.headers.get("cache-control", "").lower()
+    assert "no-cache" in cc2, f"index.html cache-control: {cc2!r}"
 
 
 # ==================================================================

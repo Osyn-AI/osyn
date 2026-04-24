@@ -32,6 +32,13 @@ Built with **FastAPI** (3 Python deps), vanilla JS, and SQLite. Runs on a laptop
   <br><em>The Support Ticket Router recipe in action. A real inbound ticket (top right) goes in; structured, pretty-printed, syntax-highlighted JSON comes out — ready for a downstream CRM, Linear, or Slack webhook to consume. Recipes for this and a sister <a href="#7-inbound-lead-qualifier--full-walkthrough">Lead Qualifier</a> bot are documented as standalone walkthroughs.</em>
 </p>
 
+<p align="center">
+  <img src="miniclosedai5.png"
+       alt="Sentiment classifier chat with the header's download icon hovered, showing the tooltip 'Download this chat as CSV (input,output)' — saves the conversation as a two-column SFT dataset"
+       width="820">
+  <br><em>Every chat doubles as a fine-tuning dataset. The download icon in the header exports the conversation as a two-column <code>input,output</code> CSV — edited assistant responses become the ideal targets, ready for SFT. See <a href="#curating-fine-tuning-data">Curating fine-tuning data</a>.</em>
+</p>
+
 ![stack](https://img.shields.io/badge/FastAPI-0.110+-009688) ![Ollama](https://img.shields.io/badge/Ollama-local-000000) ![license](https://img.shields.io/badge/license-MIT-blue)
 
 > The defining idea: **each saved conversation is an addressable microservice.** You craft a system prompt + sampling params once in the UI, and that chat becomes a stable URL you can call from anything that speaks HTTP — including any OpenAI SDK.
