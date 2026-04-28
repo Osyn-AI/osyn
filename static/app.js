@@ -1485,6 +1485,9 @@ function _renderBackendCard(b) {
   card.className = "backend-card";
   card.dataset.backendId = b.id;
 
+  const top = document.createElement("div");
+  top.className = "backend-card-top";
+
   const meta = document.createElement("div");
   meta.className = "backend-meta";
 
@@ -1531,7 +1534,7 @@ function _renderBackendCard(b) {
   status.innerHTML = `<span class="status-dot"></span><span class="status-text">checking…</span>`;
   meta.appendChild(status);
 
-  card.appendChild(meta);
+  top.appendChild(meta);
 
   const actions = document.createElement("div");
   actions.className = "backend-actions";
@@ -1550,8 +1553,174 @@ function _renderBackendCard(b) {
     actions.appendChild(deleteBtn);
   }
 
-  card.appendChild(actions);
+  top.appendChild(actions);
+  card.appendChild(top);
+
+  if (b.kind === "ollama" && b.enabled) {
+    card.appendChild(_renderPullSection(b));
+  }
   return card;
+}
+
+function _renderPullSection(b) {
+  const wrap = document.createElement("div");
+  wrap.className = "backend-pull";
+  wrap.dataset.backendId = b.id;
+
+  const form = document.createElement("form");
+  form.className = "backend-pull-form";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "e.g. qwen3:30b";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.required = true;
+  form.appendChild(input);
+
+  const btn = document.createElement("button");
+  btn.type = "submit";
+  btn.className = "btn btn-primary btn-small";
+  btn.textContent = "Download";
+  form.appendChild(btn);
+
+  const err = document.createElement("div");
+  err.className = "backend-pull-error";
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = input.value.trim();
+    if (!name) return;
+    err.textContent = "";
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/backends/${b.id}/pull`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `HTTP ${res.status}`);
+      }
+      input.value = "";
+      // Trigger an immediate poll so the new pull shows up without waiting.
+      pollPullsNow();
+    } catch (e) {
+      err.textContent = String(e.message || e);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  wrap.appendChild(form);
+  wrap.appendChild(err);
+
+  const list = document.createElement("div");
+  list.className = "pull-list";
+  list.dataset.pullListBackend = String(b.id);
+  wrap.appendChild(list);
+
+  // Initial render from current cached state.
+  _renderPullList(list, b.id);
+  return wrap;
+}
+
+function _formatBytes(n) {
+  if (!n || n < 0) return "";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
+}
+
+function _renderPullList(listEl, backendId) {
+  const all = (window.__pullsState && window.__pullsState.pulls) || [];
+  const mine = all.filter(p => p.backend_id === backendId);
+  listEl.innerHTML = "";
+  for (const p of mine) {
+    listEl.appendChild(_renderPullItem(p));
+  }
+}
+
+function _renderPullItem(p) {
+  const item = document.createElement("div");
+  item.className = "pull-item";
+
+  const row = document.createElement("div");
+  row.className = "pull-item-row";
+
+  const inFlight = !p.done;
+  if (inFlight) {
+    const spin = document.createElement("div");
+    spin.className = "pull-spinner";
+    row.appendChild(spin);
+  }
+
+  const name = document.createElement("span");
+  name.className = "pull-name";
+  name.textContent = p.name;
+  row.appendChild(name);
+
+  const status = document.createElement("span");
+  status.className = "pull-status";
+  if (p.error && p.status === "cancelled") {
+    status.textContent = "cancelled";
+  } else if (p.error) {
+    status.classList.add("error");
+    status.textContent = p.error;
+  } else if (p.done) {
+    status.classList.add("success");
+    status.textContent = "downloaded";
+  } else if (p.total && p.completed) {
+    const pct = Math.floor((p.completed / p.total) * 100);
+    status.textContent = `${p.status} · ${_formatBytes(p.completed)} / ${_formatBytes(p.total)} · ${pct}%`;
+  } else {
+    status.textContent = p.status || "starting";
+  }
+  row.appendChild(status);
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "btn btn-small";
+  cancelBtn.type = "button";
+  cancelBtn.textContent = inFlight ? "Cancel" : "Dismiss";
+  cancelBtn.addEventListener("click", async () => {
+    cancelBtn.disabled = true;
+    try {
+      await fetch(
+        `/api/backends/${p.backend_id}/pulls/${encodeURIComponent(p.name)}`,
+        { method: "DELETE" }
+      );
+      pollPullsNow();
+    } catch {
+      cancelBtn.disabled = false;
+    }
+  });
+  row.appendChild(cancelBtn);
+
+  item.appendChild(row);
+
+  // Progress bar
+  const bar = document.createElement("div");
+  bar.className = "pull-bar";
+  const fill = document.createElement("div");
+  fill.className = "pull-bar-fill";
+  if (p.error && p.status !== "cancelled") {
+    fill.classList.add("error");
+    fill.style.width = "100%";
+  } else if (p.done && !p.error) {
+    fill.classList.add("success");
+    fill.style.width = "100%";
+  } else if (p.total && p.completed) {
+    fill.style.width = `${Math.min(100, (p.completed / p.total) * 100)}%`;
+  } else if (inFlight) {
+    fill.classList.add("indeterminate");
+  }
+  bar.appendChild(fill);
+  item.appendChild(bar);
+
+  return item;
 }
 
 async function _pollBackendStatus(backendId, cardEl) {
@@ -1842,6 +2011,71 @@ function initActivityBar() {
   applyActivePage(saved || "dashboard");
 }
 
+// ---------- Pull poller ----------
+// Runs once at app load. Polls /api/pulls every second, mirrors the result
+// onto window.__pullsState, and re-renders any visible pull lists. Also
+// detects done-transitions so the dashboard model dropdown can refresh once
+// the new model finishes downloading.
+
+window.__pullsState = { pulls: [] };
+let _pullPollTimer = null;
+let _pullPollInFlight = false;
+const _seenDonePulls = new Set();
+
+async function _pollPullsOnce() {
+  if (_pullPollInFlight) return;
+  _pullPollInFlight = true;
+  try {
+    const r = await fetch("/api/pulls");
+    if (!r.ok) return;
+    const data = await r.json();
+    const prev = window.__pullsState.pulls || [];
+    window.__pullsState = data;
+
+    // Re-render any pull lists currently in the DOM.
+    document.querySelectorAll("[data-pull-list-backend]").forEach(el => {
+      const bid = parseInt(el.dataset.pullListBackend, 10);
+      if (!Number.isNaN(bid)) _renderPullList(el, bid);
+    });
+
+    // Detect newly-done pulls so we can refresh the dashboard model list once.
+    let modelsNeedRefresh = false;
+    for (const p of data.pulls || []) {
+      if (p.done && !p.error && !_seenDonePulls.has(p.key)) {
+        _seenDonePulls.add(p.key);
+        modelsNeedRefresh = true;
+      }
+    }
+    // Also keep _seenDonePulls from growing forever — drop entries that have
+    // since been dismissed from the registry.
+    const liveKeys = new Set((data.pulls || []).map(p => p.key));
+    for (const k of [..._seenDonePulls]) {
+      if (!liveKeys.has(k)) _seenDonePulls.delete(k);
+    }
+
+    if (modelsNeedRefresh && typeof loadModels === "function") {
+      loadModels().catch(() => {});
+    }
+
+    // Suppress unused-var warning in linters that care.
+    void prev;
+  } catch {
+    // swallow — next tick retries
+  } finally {
+    _pullPollInFlight = false;
+  }
+}
+
+function pollPullsNow() {
+  _pollPullsOnce();
+}
+
+function startPullPoller() {
+  if (_pullPollTimer) return;
+  _pollPullsOnce();
+  _pullPollTimer = setInterval(_pollPullsOnce, 1000);
+}
+
 async function init() {
   initTheme();
   initSidebarToggle();
@@ -1854,6 +2088,7 @@ async function init() {
   initHSplitter();
   initSuggestionChips();
   if (typeof initBackendsUI === "function") initBackendsUI();
+  startPullPoller();
   els.input.addEventListener("input", autoGrowInput);
   await loadModels();
   await loadConversations();

@@ -116,6 +116,37 @@ async def _ollama_list_models(backend: dict) -> list[dict]:
         return []
 
 
+async def pull_ollama_model(backend: dict, name: str) -> AsyncIterator[dict]:
+    """Stream Ollama's `/api/pull` progress events for a model name.
+
+    Yields the raw JSON-line dicts: `{status, digest?, total?, completed?}`,
+    and a final `{status: "success"}` when done. Caller is responsible for
+    interpreting / persisting them. Raises if the backend isn't Ollama.
+    """
+    if backend.get("kind") != "ollama":
+        raise ValueError("pull is only supported on Ollama backends")
+    payload = {"name": name, "stream": True}
+    async with httpx.AsyncClient(timeout=None) as client:
+        async with client.stream(
+            "POST", f"{_base_url(backend)}/api/pull", json=payload
+        ) as r:
+            if r.status_code != 200:
+                body = (await r.aread()).decode("utf-8", errors="replace")
+                raise RuntimeError(
+                    f"{backend.get('name', 'Ollama')} returned {r.status_code}: {body[:400]}"
+                )
+            async for line in r.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(data, dict) and data.get("error"):
+                    raise RuntimeError(str(data["error"]))
+                yield data
+
+
 async def _ollama_chat_stream(
     backend: dict,
     model: str,

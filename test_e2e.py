@@ -85,8 +85,13 @@ class FakeOllama(_FakeServer):
     Set `instance.dirty = True` before a stream to emit leading + trailing
     whitespace in content chunks — used by the persist-strip test to prove
     the server cleans up model output before writing it to the DB.
+
+    For pull tests, configure `pull_chunks` (list of JSON-line dicts) and
+    `pull_per_chunk_delay` (seconds between emitted chunks) before each test.
     """
     dirty = False
+    pull_chunks: list[dict] = []
+    pull_per_chunk_delay: float = 0.0
 
     def _handler_class(self):
         captured = self.captured
@@ -129,6 +134,23 @@ class FakeOllama(_FakeServer):
                     for f in frames:
                         self.wfile.write((json.dumps(f) + "\n").encode())
                         self.wfile.flush()
+                    return
+                if self.path == "/api/pull":
+                    length = int(self.headers.get("Content-Length", "0"))
+                    payload = json.loads(self.rfile.read(length)) if length else {}
+                    captured.append({"path": self.path, "payload": payload})
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson")
+                    self.end_headers()
+                    try:
+                        for c in list(outer.pull_chunks):
+                            if outer.pull_per_chunk_delay:
+                                time.sleep(outer.pull_per_chunk_delay)
+                            self.wfile.write((json.dumps(c) + "\n").encode())
+                            self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        # Client cancelled mid-stream — expected in cancel tests.
+                        pass
                     return
                 self._reply(404, b"not found", "text/plain")
 
@@ -974,6 +996,130 @@ def _():
     assert "no-cache" in cc2, f"index.html cache-control: {cc2!r}"
 
 
+# ------------------------------------------------------------------
+# Pull (Ollama model download) tests
+# ------------------------------------------------------------------
+
+def _reset_pull_fake():
+    fake_ollama.pull_chunks = [
+        {"status": "pulling manifest"},
+        {"status": "downloading sha:a", "total": 100, "completed": 50},
+        {"status": "downloading sha:a", "total": 100, "completed": 100},
+        {"status": "success"},
+    ]
+    fake_ollama.pull_per_chunk_delay = 0.0
+
+
+def _wait_pull(key, predicate, timeout=5.0):
+    t0 = time.time()
+    last = None
+    while time.time() - t0 < timeout:
+        last = client.get("/api/pulls").json()
+        for p in last["pulls"]:
+            if p["key"] == key and predicate(p):
+                return p
+        time.sleep(0.03)
+    raise TimeoutError(f"pull {key} predicate timed out after {timeout}s; last={last}")
+
+
+@test("pull: streams progress and lands as done with status=success")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    _reset_pull_fake()
+    name = "test-happy:1"
+    r = client.post("/api/backends/1/pull", json={"name": name})
+    assert r.status_code == 200, r.text
+    state = r.json()
+    key = state["key"]
+    assert key == f"1:{name}"
+    assert state["done"] is False, state
+
+    p = _wait_pull(key, lambda p: p["done"])
+    assert p["error"] is None, p
+    assert p["status"] == "success", p
+    assert p["total"] == 100, p
+    assert p["completed"] == 100, p
+
+    # Cleanup so subsequent tests start clean.
+    client.delete(f"/api/backends/1/pulls/{name}")
+
+
+@test("pull: Ollama-side error lands in state.error with status=error")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    fake_ollama.pull_chunks = [
+        {"status": "pulling manifest"},
+        {"error": "manifest not found"},
+    ]
+    fake_ollama.pull_per_chunk_delay = 0.0
+    name = "test-error:1"
+    r = client.post("/api/backends/1/pull", json={"name": name})
+    assert r.status_code == 200, r.text
+    key = r.json()["key"]
+
+    p = _wait_pull(key, lambda p: p["done"])
+    assert p["status"] == "error", p
+    assert p["error"] and "manifest not found" in p["error"], p
+
+    client.delete(f"/api/backends/1/pulls/{name}")
+
+
+@test("pull: duplicate pull while in-flight returns 409")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    _reset_pull_fake()
+    fake_ollama.pull_per_chunk_delay = 0.5  # stretch the pull so it stays in-flight
+    name = "test-dup:1"
+    r1 = client.post("/api/backends/1/pull", json={"name": name})
+    assert r1.status_code == 200, r1.text
+
+    r2 = client.post("/api/backends/1/pull", json={"name": name})
+    assert r2.status_code == 409, r2.text
+
+    # Cancel + reset for next tests.
+    client.delete(f"/api/backends/1/pulls/{name}")
+    _reset_pull_fake()
+
+
+@test("pull: rejected on non-Ollama backend (400)")
+def _():
+    bid = _add_openai_backend()
+    try:
+        r = client.post(f"/api/backends/{bid}/pull", json={"name": "anything"})
+        assert r.status_code == 400, r.text
+    finally:
+        client.delete(f"/api/backends/{bid}")
+
+
+@test("pull: cancel removes the in-flight pull from the registry")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    _reset_pull_fake()
+    fake_ollama.pull_per_chunk_delay = 0.5
+    name = "test-cancel:1"
+    r = client.post("/api/backends/1/pull", json={"name": name})
+    assert r.status_code == 200, r.text
+    key = r.json()["key"]
+
+    # Confirm it's actually registered + in-flight before cancelling.
+    _wait_pull(key, lambda p: not p["done"])
+
+    rc = client.delete(f"/api/backends/1/pulls/{name}")
+    assert rc.status_code == 200, rc.text
+
+    pulls = client.get("/api/pulls").json()["pulls"]
+    assert not any(p["key"] == key for p in pulls), f"pull still listed after cancel: {pulls}"
+
+    _reset_pull_fake()
+
+
+@test("pull: missing name field is rejected (422)")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    r = client.post("/api/backends/1/pull", json={})
+    assert r.status_code == 422, r.text
+
+
 # ==================================================================
 # Main
 # ==================================================================
@@ -981,8 +1127,13 @@ def _():
 def main() -> int:
     print(f"\nrunning {len(_TESTS)} tests against temp DB {_TMP_DB}\n")
     t0 = time.perf_counter()
-    for _, fn in _TESTS:
-        fn()
+    # Enter the TestClient as a context manager so the underlying anyio portal
+    # / asyncio loop persists across requests. Required for pull tests, which
+    # rely on asyncio.create_task-spawned tasks surviving past the request that
+    # started them — without this they get cancelled immediately.
+    with client:
+        for _, fn in _TESTS:
+            fn()
 
     total = time.perf_counter() - t0
     passed = sum(1 for _, ok, _ in _RESULTS if ok)
