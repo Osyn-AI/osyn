@@ -5,6 +5,7 @@ Each saved conversation (bot) is pinned to a single backend via
 server (LM Studio, vLLM, llama.cpp's `server`, etc.). All backend handling
 lives in llm.py — this module is HTTP routing + persistence.
 """
+import asyncio
 import csv
 import io
 import json
@@ -337,6 +338,120 @@ async def api_backend_status(backend_id: int):
         "kind": backend["kind"],
         "enabled": bool(backend.get("enabled")),
     }
+
+
+# ---------- Model pulls (Ollama only) ----------
+#
+# In-memory registry of pull jobs. Lost on restart; the underlying download
+# continues on the Ollama side either way, so the only thing lost is the
+# progress UI for whatever was in flight at restart time. Acceptable for v1.
+
+class PullRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+
+
+def _pull_key(backend_id: int, name: str) -> str:
+    return f"{backend_id}:{name}"
+
+
+_pulls: dict[str, dict] = {}
+_pull_tasks: dict[str, asyncio.Task] = {}
+
+
+def _public_pull(state: dict) -> dict:
+    return {k: v for k, v in state.items() if k != "_lock"}
+
+
+async def _run_pull(key: str, backend: dict, name: str) -> None:
+    state = _pulls[key]
+    try:
+        async for ev in llm.pull_ollama_model(backend, name):
+            status = ev.get("status")
+            if status:
+                state["status"] = status
+            if "total" in ev:
+                state["total"] = ev["total"]
+            if "completed" in ev:
+                state["completed"] = ev["completed"]
+            if status == "success":
+                state["done"] = True
+                state["completed"] = state.get("total") or state.get("completed") or 0
+        state["done"] = True
+        if not state.get("status"):
+            state["status"] = "success"
+    except asyncio.CancelledError:
+        state["error"] = "cancelled"
+        state["status"] = "cancelled"
+        state["done"] = True
+        raise
+    except Exception as e:
+        state["error"] = str(e)
+        state["status"] = "error"
+        state["done"] = True
+    finally:
+        _pull_tasks.pop(key, None)
+
+
+@app.post("/api/backends/{backend_id}/pull")
+async def api_start_pull(backend_id: int, data: PullRequest):
+    backend = _load_backend(backend_id)
+    if backend.get("kind") != "ollama":
+        raise HTTPException(400, "Pull is only supported on Ollama backends")
+    if not backend.get("enabled"):
+        raise HTTPException(400, "Backend is disabled")
+
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(400, "Model name is required")
+
+    key = _pull_key(backend_id, name)
+    existing = _pulls.get(key)
+    if existing and not existing.get("done"):
+        raise HTTPException(409, f"A pull for '{name}' is already running")
+
+    state = {
+        "key": key,
+        "backend_id": backend_id,
+        "backend_name": backend.get("name"),
+        "name": name,
+        "status": "starting",
+        "completed": 0,
+        "total": 0,
+        "error": None,
+        "done": False,
+        "started_at": time.time(),
+    }
+    _pulls[key] = state
+    task = asyncio.create_task(_run_pull(key, backend, name))
+    _pull_tasks[key] = task
+    return _public_pull(state)
+
+
+@app.get("/api/pulls")
+def api_list_pulls():
+    items = sorted(
+        (_public_pull(s) for s in _pulls.values()),
+        key=lambda s: s.get("started_at") or 0,
+        reverse=True,
+    )
+    return {"pulls": items}
+
+
+@app.delete("/api/backends/{backend_id}/pulls/{name:path}")
+async def api_cancel_pull(backend_id: int, name: str):
+    key = _pull_key(backend_id, name)
+    state = _pulls.get(key)
+    if not state:
+        raise HTTPException(404, "No such pull")
+    task = _pull_tasks.get(key)
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+    _pulls.pop(key, None)
+    return {"ok": True}
 
 
 # ---------- Models (aggregated across all backends) ----------
