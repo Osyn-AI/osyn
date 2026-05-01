@@ -102,6 +102,8 @@ class FakeOllama(_FakeServer):
 
             def do_GET(self):
                 if self.path == "/api/tags":
+                    captured.append({"path": self.path,
+                                     "headers": dict(self.headers)})
                     body = json.dumps({
                         "models": [
                             {"name": "ollama-a:3b", "size": 1_000_000,
@@ -118,7 +120,8 @@ class FakeOllama(_FakeServer):
                 if self.path == "/api/chat":
                     length = int(self.headers.get("Content-Length", "0"))
                     payload = json.loads(self.rfile.read(length))
-                    captured.append({"path": self.path, "payload": payload})
+                    captured.append({"path": self.path, "payload": payload,
+                                     "headers": dict(self.headers)})
                     self.send_response(200)
                     self.send_header("Content-Type", "application/x-ndjson")
                     self.end_headers()
@@ -1118,6 +1121,344 @@ def _():
     _reseed_builtin_to_fake_ollama()
     r = client.post("/api/backends/1/pull", json={})
     assert r.status_code == 422, r.text
+
+
+# ==================================================================
+# File attachments — /api/extract-pdf + multimodal chat round-trips
+# ==================================================================
+#
+# The frontend reads images and plain-text files in the browser, but PDFs
+# need server-side extraction. These tests exercise both paths plus the
+# wire-format translation in llm.py — Ollama gets {content, images:[base64]},
+# OpenAI-compat gets the OpenAI content-array shape passed through.
+
+# Hand-built minimal one-page PDF — small enough to inline, real enough that
+# pypdf extracts the text. Saves a build dependency on reportlab.
+_TEST_PDF_BYTES = (
+    b"%PDF-1.4\n"
+    b"1 0 obj <</Type /Catalog /Pages 2 0 R>> endobj\n"
+    b"2 0 obj <</Type /Pages /Kids [3 0 R] /Count 1>> endobj\n"
+    b"3 0 obj <</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+    b"/Resources <</Font <</F1 4 0 R>>>> /Contents 5 0 R>> endobj\n"
+    b"4 0 obj <</Type /Font /Subtype /Type1 /BaseFont /Helvetica>> endobj\n"
+    b"5 0 obj <</Length 48>> stream\n"
+    b"BT /F1 14 Tf 100 700 Td (TEST_PDF_MARKER) Tj ET\n"
+    b"endstream endobj\n"
+    b"xref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n"
+    b"0000000058 00000 n \n0000000111 00000 n \n0000000214 00000 n \n"
+    b"0000000278 00000 n \n"
+    b"trailer <</Size 6 /Root 1 0 R>>\n"
+    b"startxref\n374\n%%EOF\n"
+)
+
+# 1×1 transparent PNG, base64. Plenty for a smoke test without dragging in PIL.
+_TINY_PNG_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4"
+    "nGP4//8/AwAI/AL+XJ/PtQAAAABJRU5ErkJggg=="
+)
+_TINY_PNG_BASE64 = _TINY_PNG_DATA_URL.split(",", 1)[1]
+
+
+@test("extract-pdf: happy path — text + page_count + char_count returned")
+def _():
+    r = client.post(
+        "/api/extract-pdf",
+        files={"file": ("hello.pdf", _TEST_PDF_BYTES, "application/pdf")},
+    )
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["filename"] == "hello.pdf"
+    assert j["page_count"] == 1
+    assert j["truncated"] is False
+    assert "TEST_PDF_MARKER" in j["text"], f"marker missing: {j['text']!r}"
+    assert j["char_count"] == len(j["text"])
+
+
+@test("extract-pdf: oversize upload is rejected (413)")
+def _():
+    # 11 MB of zero bytes — past the 10 MB cap.
+    big = b"\x00" * (11 * 1024 * 1024)
+    r = client.post(
+        "/api/extract-pdf",
+        files={"file": ("big.pdf", big, "application/pdf")},
+    )
+    assert r.status_code == 413, r.text
+    assert "too large" in r.json()["detail"].lower()
+
+
+@test("extract-pdf: malformed bytes return 400")
+def _():
+    r = client.post(
+        "/api/extract-pdf",
+        files={"file": ("not-a-pdf.pdf", b"this is plain text, not a PDF",
+                        "application/pdf")},
+    )
+    assert r.status_code == 400, r.text
+
+
+@test("attachments: image → Ollama content + images:[base64] (no data: prefix)")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    fake_ollama.captured.clear()
+    c = client.post("/api/conversations", json={
+        "title": "img-ollama", "model": "ollama-a:3b", "backend_id": 1,
+    }).json()
+    try:
+        r = client.post(f"/api/conversations/{c['id']}/chat", json={
+            "message": "What's in this image?",
+            "attachments": [{
+                "name": "tiny.png", "kind": "image", "mime": "image/png",
+                "data_url": _TINY_PNG_DATA_URL,
+            }],
+        })
+        assert r.status_code == 200, r.text
+        sent = fake_ollama.captured[-1]["payload"]
+        # Find the user turn the server forwarded.
+        user_msgs = [m for m in sent["messages"] if m.get("role") == "user"]
+        assert user_msgs, "no user message in payload"
+        last_user = user_msgs[-1]
+        # Translation: text in `content`, base64 (no data: prefix) in `images`.
+        assert isinstance(last_user["content"], str), \
+            f"Ollama path must collapse content to string, got {type(last_user['content'])}"
+        assert "What's in this image?" in last_user["content"]
+        assert last_user.get("images") == [_TINY_PNG_BASE64], \
+            f"images list mismatch: {last_user.get('images')}"
+    finally:
+        client.delete(f"/api/conversations/{c['id']}")
+
+
+@test("attachments: text file body is prepended to user content")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    fake_ollama.captured.clear()
+    c = client.post("/api/conversations", json={
+        "title": "txt-ollama", "model": "ollama-a:3b", "backend_id": 1,
+    }).json()
+    try:
+        r = client.post(f"/api/conversations/{c['id']}/chat", json={
+            "message": "Summarize.",
+            "attachments": [{
+                "name": "shopping.txt", "kind": "text",
+                "text": "milk\neggs\nbread",
+            }],
+        })
+        assert r.status_code == 200, r.text
+        sent = fake_ollama.captured[-1]["payload"]
+        last_user = [m for m in sent["messages"] if m.get("role") == "user"][-1]
+        assert "[Attached: shopping.txt]" in last_user["content"]
+        assert "milk\neggs\nbread" in last_user["content"]
+        assert "Summarize." in last_user["content"]
+        # Text-only attachment must NOT produce an `images` key.
+        assert "images" not in last_user
+    finally:
+        client.delete(f"/api/conversations/{c['id']}")
+
+
+@test("attachments: PDF text uses [Attached: name] header, no images key")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    fake_ollama.captured.clear()
+    c = client.post("/api/conversations", json={
+        "title": "pdf-ollama", "model": "ollama-a:3b", "backend_id": 1,
+    }).json()
+    try:
+        r = client.post(f"/api/conversations/{c['id']}/chat", json={
+            "message": "What's in the doc?",
+            "attachments": [{
+                "name": "secret.pdf", "kind": "pdf",
+                "text": "TOP_SECRET_TOKEN_42", "page_count": 1,
+                "char_count": 18, "truncated": False,
+            }],
+        })
+        assert r.status_code == 200, r.text
+        last_user = [m for m in fake_ollama.captured[-1]["payload"]["messages"]
+                     if m.get("role") == "user"][-1]
+        assert "[Attached: secret.pdf]" in last_user["content"]
+        assert "TOP_SECRET_TOKEN_42" in last_user["content"]
+        assert "images" not in last_user
+    finally:
+        client.delete(f"/api/conversations/{c['id']}")
+
+
+@test("attachments: image to OpenAI-compat sends content-array unchanged")
+def _():
+    bid = _add_openai_backend()
+    fake_openai.captured.clear()
+    c = client.post("/api/conversations", json={
+        "title": "img-oai", "model": "openai-a-4b", "backend_id": bid,
+    }).json()
+    try:
+        r = client.post(f"/api/conversations/{c['id']}/chat", json={
+            "message": "What's in this image?",
+            "attachments": [{
+                "name": "tiny.png", "kind": "image", "mime": "image/png",
+                "data_url": _TINY_PNG_DATA_URL,
+            }],
+        })
+        assert r.status_code == 200, r.text
+        sent = fake_openai.captured[-1]["payload"]
+        last_user = [m for m in sent["messages"] if m.get("role") == "user"][-1]
+        # OpenAI shape: content is a list of typed parts, NOT a top-level images key.
+        assert isinstance(last_user["content"], list), \
+            f"OpenAI path must keep content array; got {type(last_user['content'])}"
+        types = [p.get("type") for p in last_user["content"]]
+        assert "text" in types and "image_url" in types, f"types: {types}"
+        # Image part keeps the full data: URL (server forwards as-is to OpenAI).
+        img_part = next(p for p in last_user["content"] if p.get("type") == "image_url")
+        assert img_part["image_url"]["url"] == _TINY_PNG_DATA_URL
+        # No top-level images field on the OpenAI path.
+        assert "images" not in last_user
+    finally:
+        client.delete(f"/api/conversations/{c['id']}")
+        client.delete(f"/api/backends/{bid}")
+
+
+@test("attachments: persistence preserves display_text + attachments metadata")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    c = client.post("/api/conversations", json={
+        "title": "persist-mm", "model": "ollama-a:3b", "backend_id": 1,
+    }).json()
+    try:
+        r = client.post(f"/api/conversations/{c['id']}/chat", json={
+            "message": "describe",
+            "persist": True,
+            "attachments": [
+                {"name": "tiny.png", "kind": "image", "mime": "image/png",
+                 "data_url": _TINY_PNG_DATA_URL},
+                {"name": "notes.txt", "kind": "text", "text": "hi"},
+            ],
+        })
+        assert r.status_code == 200, r.text
+        full = client.get(f"/api/conversations/{c['id']}").json()
+        msgs = full["messages"]
+        user_msg = next(m for m in msgs if m.get("role") == "user")
+        # The stored content is the OpenAI-style content array (image data lives there).
+        assert isinstance(user_msg["content"], list), \
+            f"persisted content not a list: {type(user_msg['content'])}"
+        types = [p.get("type") for p in user_msg["content"]]
+        assert "text" in types and "image_url" in types
+        # display_text is the user's typed text only — no [Attached: …] preamble.
+        assert user_msg.get("display_text") == "describe", \
+            f"display_text: {user_msg.get('display_text')!r}"
+        kinds = [a.get("kind") for a in user_msg.get("attachments") or []]
+        assert kinds == ["image", "text"], f"attachments meta kinds: {kinds}"
+        # Image attachment metadata does NOT duplicate the base64 (lives in content).
+        img_meta = user_msg["attachments"][0]
+        assert "data_url" not in img_meta and "url" not in img_meta
+        assert img_meta.get("mime") == "image/png"
+    finally:
+        client.delete(f"/api/conversations/{c['id']}")
+
+
+@test("attachments: rejected on messages=[…] form (single-message form only)")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    c = client.post("/api/conversations", json={
+        "title": "mm-reject", "model": "ollama-a:3b", "backend_id": 1,
+    }).json()
+    try:
+        r = client.post(f"/api/conversations/{c['id']}/chat", json={
+            "messages": [{"role": "user", "content": "hi"}],
+            "attachments": [{"name": "x.txt", "kind": "text", "text": "hi"}],
+        })
+        assert r.status_code == 400, r.text
+        assert "single-`message` form" in r.json()["detail"]
+    finally:
+        client.delete(f"/api/conversations/{c['id']}")
+
+
+@test("attachments: include_history replays a stored multimodal turn correctly")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    c = client.post("/api/conversations", json={
+        "title": "mm-history", "model": "ollama-a:3b", "backend_id": 1,
+    }).json()
+    try:
+        # Turn 1: store a multimodal user turn (image + text) with persist=true.
+        r1 = client.post(f"/api/conversations/{c['id']}/chat", json={
+            "message": "describe",
+            "persist": True,
+            "attachments": [{
+                "name": "tiny.png", "kind": "image", "mime": "image/png",
+                "data_url": _TINY_PNG_DATA_URL,
+            }],
+        })
+        assert r1.status_code == 200, r1.text
+
+        # Turn 2: include_history=true should replay turn 1 correctly.
+        fake_ollama.captured.clear()
+        r2 = client.post(f"/api/conversations/{c['id']}/chat", json={
+            "message": "again",
+            "include_history": True,
+        })
+        assert r2.status_code == 200, r2.text
+        sent = fake_ollama.captured[-1]["payload"]
+        # The replayed turn 1 user message should arrive translated for Ollama:
+        # `images: [base64]` and a string content. (Persisted shape was a content
+        # array; llm.py's _to_ollama_message must collapse it on the way out.)
+        user_msgs = [m for m in sent["messages"] if m.get("role") == "user"]
+        assert len(user_msgs) == 2, f"expected 2 user turns, got {len(user_msgs)}"
+        replayed = user_msgs[0]   # the older one is turn 1
+        assert isinstance(replayed["content"], str), \
+            f"replayed content not collapsed for Ollama: {type(replayed['content'])}"
+        assert replayed.get("images") == [_TINY_PNG_BASE64], \
+            "replayed image base64 missing or mismatched"
+    finally:
+        client.delete(f"/api/conversations/{c['id']}")
+
+
+@test("ollama auth: api_key sent as Bearer on /api/tags + /api/chat")
+def _():
+    # Register a SECOND ollama-kind backend pointing at the same fake server,
+    # but with an api_key set. Our fake captures Authorization on both routes.
+    r = client.post("/api/backends", json={
+        "name": "auth-ollama", "kind": "ollama",
+        "base_url": fake_ollama.base_url,
+        "api_key": "sekrit-token-xyz",
+    })
+    assert r.status_code == 200, r.text
+    bid = r.json()["id"]
+    fake_ollama.captured.clear()
+    try:
+        # Hits /api/tags (list_models)
+        r2 = client.get(f"/api/backends/{bid}/models")
+        assert r2.status_code == 200, r2.text
+        tags_calls = [c for c in fake_ollama.captured if c["path"] == "/api/tags"]
+        assert tags_calls, "no /api/tags hit captured"
+        assert tags_calls[-1]["headers"].get("Authorization") == "Bearer sekrit-token-xyz", \
+            f"expected Bearer header on /api/tags; got headers {tags_calls[-1]['headers']}"
+
+        # Hits /api/chat
+        c = client.post("/api/conversations", json={
+            "title": "auth-chat", "model": "ollama-a:3b", "backend_id": bid,
+        }).json()
+        try:
+            r3 = client.post(f"/api/conversations/{c['id']}/chat",
+                             json={"message": "hi"})
+            assert r3.status_code == 200, r3.text
+            chat_calls = [c for c in fake_ollama.captured if c["path"] == "/api/chat"]
+            assert chat_calls, "no /api/chat hit captured"
+            assert chat_calls[-1]["headers"].get("Authorization") == "Bearer sekrit-token-xyz", \
+                f"expected Bearer header on /api/chat; got headers {chat_calls[-1]['headers']}"
+        finally:
+            client.delete(f"/api/conversations/{c['id']}")
+    finally:
+        client.delete(f"/api/backends/{bid}")
+
+
+@test("ollama auth: no api_key → no Authorization header (back-compat)")
+def _():
+    # Built-in backend has no api_key — must NOT send Authorization.
+    _reseed_builtin_to_fake_ollama()
+    fake_ollama.captured.clear()
+    r = client.get("/api/backends/1/models")
+    assert r.status_code == 200, r.text
+    tags_calls = [c for c in fake_ollama.captured if c["path"] == "/api/tags"]
+    assert tags_calls, "no /api/tags call captured"
+    auth_hdr = tags_calls[-1]["headers"].get("Authorization")
+    assert auth_hdr is None, f"unauthenticated backend leaked Authorization: {auth_hdr}"
 
 
 # ==================================================================
