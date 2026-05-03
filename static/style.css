@@ -455,6 +455,13 @@ body[data-page="settings"] .page-settings {
   backdrop-filter: saturate(180%) blur(12px);
   flex-wrap: nowrap;
   min-width: 0;
+  /* Pin the topbar (and any popovers anchored inside it — download menu,
+     etc.) above the chat scroll container. Without an explicit z-index the
+     topbar and the layout stack at z-index `auto` and paint in source
+     order, which means scrolled chat content paints OVER the topbar's
+     popovers. Anything modal-like (settings, confirmations) sits at 1000+. */
+  position: relative;
+  z-index: 100;
 }
 
 .brand {
@@ -675,13 +682,22 @@ textarea {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  min-width: 280px;
+  /* Don't promise more width than we'll have. The header sits near the right
+     viewport edge; with `right: 0` the popover extends LEFTWARD from the
+     anchor — so a min-width that's too generous would push other items off
+     to the left or, on a narrow viewport, overflow the screen on the left. */
+  width: 280px;
+  max-width: calc(100vw - 24px);
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-md);
   padding: 4px;
-  z-index: 50;
+  /* Sit above scrolled chat content. Chat bubbles have no explicit z-index
+     but their scroll container creates a stacking context; bump the popover
+     well past that so nothing in the chat ever paints over it. The modal
+     backdrop sits at z-index 1000+ so we stay below that on purpose. */
+  z-index: 900;
   display: flex;
   flex-direction: column;
   gap: 2px;
