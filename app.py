@@ -16,13 +16,14 @@ import subprocess
 import time
 import zipfile
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -1149,6 +1150,199 @@ def _persist_turn(req: ChatRequest, assistant_text: str, backend: dict) -> None:
             (json.dumps(existing), req.model, req.conversation_id),
         )
         conn.commit()
+
+
+# ---------- Bot import/export ----------
+#
+# Portable, share-by-file bot configs. Format: a small JSON file with model
+# name (string, not backend ID — backend IDs don't survive across instances),
+# system prompt, sampling params, and optionally the conversation history.
+# No API keys, no backend rows.
+
+_BOT_EXPORT_FORMAT = "miniclosed-bot"
+_BOT_EXPORT_FORMAT_VERSION = 1
+
+
+class BotImportRequest(BaseModel):
+    """POST /api/conversations/import body."""
+    model_config = ConfigDict(extra="forbid")
+    data: dict
+    # When set, skip the auto-match probe and use this backend. The GUI sends
+    # this on the second pass after the user picks from `available_backends`.
+    backend_id: int | None = None
+
+
+def _slugify_filename(s: str, fallback: str = "bot") -> str:
+    cleaned = "".join(c if c.isalnum() or c in ("-", "_") else "-" for c in s).strip("-")
+    return cleaned[:60] or fallback
+
+
+async def _resolve_backend_for_model(model_name: str) -> tuple[int | None, list[dict], list[str]]:
+    """Find an enabled backend that serves `model_name`.
+
+    Returns (backend_id_or_none, candidate_backends_for_picker, warnings).
+    `candidate_backends_for_picker` is the full enabled list (with their
+    `models` arrays) so the GUI can render a "no auto-match — pick one" dialog
+    without a second round-trip.
+    """
+    warnings: list[str] = []
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM backends WHERE enabled = 1 ORDER BY id"
+        ).fetchall()
+    backends = [db.row_to_dict(r) for r in rows]
+
+    summary: list[dict] = []
+    matched_id: int | None = None
+    for b in backends:
+        models: list[dict] = []
+        try:
+            if await llm.is_running(b):
+                models = await llm.list_models(b)
+        except Exception as e:
+            warnings.append(f"backend '{b['name']}' probe failed: {e}")
+        names = [m.get("name") or m.get("id") or "" for m in models]
+        if matched_id is None and model_name in names:
+            matched_id = b["id"]
+        summary.append({
+            "id": b["id"],
+            "name": b["name"],
+            "kind": b["kind"],
+            "model_present": model_name in names,
+            "model_count": len(names),
+        })
+    return matched_id, summary, warnings
+
+
+@app.get("/api/conversations/{conv_id}/export")
+def api_export_conversation_bot(conv_id: int, include_history: bool = False):
+    """Export a saved bot as a portable JSON file.
+
+    Carries config (title, model name, system prompt, params) plus optional
+    conversation history. Strips backend_id and any DB ids — the importing
+    instance resolves the backend itself by matching on model name.
+    """
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT title, model, system_prompt, params, messages FROM conversations WHERE id = ?",
+            (conv_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Conversation not found")
+
+    params = json.loads(row["params"] or "{}")
+    bot_payload = {
+        "title": row["title"],
+        "model": row["model"],
+        "system_prompt": row["system_prompt"],
+        "params": params,
+    }
+    export = {
+        "format": _BOT_EXPORT_FORMAT,
+        "format_version": _BOT_EXPORT_FORMAT_VERSION,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "bot": bot_payload,
+        "sample_messages": json.loads(row["messages"] or "[]") if include_history else [],
+    }
+    fname = f"{_slugify_filename(row['title'])}.miniclosed-bot.json"
+    return Response(
+        content=json.dumps(export, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.post("/api/conversations/import", status_code=201)
+async def api_import_conversation_bot(req: BotImportRequest):
+    """Import a bot from a previously-exported JSON file.
+
+    Always creates a NEW conversation row — never overwrites. Backend
+    resolution: caller-supplied `backend_id` wins; otherwise we scan enabled
+    backends and pick the first one whose model list contains the requested
+    model name. If neither path resolves, returns 409 with the candidate
+    backend list so the GUI can prompt the user.
+    """
+    data = req.data
+    if not isinstance(data, dict) or data.get("format") != _BOT_EXPORT_FORMAT:
+        raise HTTPException(400, f"Not a {_BOT_EXPORT_FORMAT} file")
+    fmt_ver = data.get("format_version")
+    if not isinstance(fmt_ver, int) or fmt_ver > _BOT_EXPORT_FORMAT_VERSION:
+        raise HTTPException(
+            400,
+            f"Unsupported format_version {fmt_ver!r}; this server understands up to {_BOT_EXPORT_FORMAT_VERSION}",
+        )
+
+    bot = data.get("bot")
+    if not isinstance(bot, dict):
+        raise HTTPException(400, "Missing 'bot' object")
+    title = (bot.get("title") or "Imported bot").strip() or "Imported bot"
+    model = bot.get("model")
+    system_prompt = bot.get("system_prompt") or "You are a helpful AI assistant."
+    params = bot.get("params") or {}
+    if not isinstance(model, str) or not model:
+        raise HTTPException(400, "Missing 'bot.model' (string)")
+    if not isinstance(params, dict):
+        raise HTTPException(400, "'bot.params' must be an object")
+
+    warnings: list[str] = []
+
+    # 1. Resolve backend ----------------------------------------------------
+    if req.backend_id is not None:
+        try:
+            _load_backend(req.backend_id)
+        except HTTPException:
+            raise HTTPException(400, f"backend_id {req.backend_id} not found")
+        backend_id = req.backend_id
+    else:
+        matched_id, summary, probe_warnings = await _resolve_backend_for_model(model)
+        warnings.extend(probe_warnings)
+        if matched_id is None:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "needs_backend": True,
+                    "model": model,
+                    "available_backends": summary,
+                    "warnings": warnings,
+                    "detail": (
+                        f"No enabled backend currently serves model '{model}'. "
+                        "Pick a backend explicitly and retry with backend_id set."
+                    ),
+                },
+            )
+        backend_id = matched_id
+
+    # 2. Avoid title collision (cosmetic — DB allows duplicates) ------------
+    with db.get_conn() as conn:
+        existing_titles = {
+            r["title"] for r in conn.execute("SELECT title FROM conversations").fetchall()
+        }
+    if title in existing_titles:
+        suffix = 2
+        while f"{title} ({suffix})" in existing_titles:
+            suffix += 1
+        title = f"{title} ({suffix})"
+
+    # 3. Insert -------------------------------------------------------------
+    sample_messages = data.get("sample_messages") or []
+    if not isinstance(sample_messages, list):
+        warnings.append("'sample_messages' was not a list — dropped")
+        sample_messages = []
+    with db.get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO conversations (title, model, system_prompt, params, messages, backend_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (title, model, system_prompt, json.dumps(params), json.dumps(sample_messages), backend_id),
+        )
+        conn.commit()
+        new_id = cur.lastrowid
+
+    return {
+        "id": new_id,
+        "title": title,
+        "matched_backend_id": backend_id,
+        "warnings": warnings,
+    }
 
 
 @app.post("/api/chat")

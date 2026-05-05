@@ -2005,6 +2005,164 @@ def _():
         f"heavy seed shape unexpected: {dict(row)}"
 
 
+# ---- Bot import/export ----
+
+@test("bot export: returns miniclosed-bot json with config, no backend_id leakage")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    c = client.post("/api/conversations", json={
+        "title": "Doctor's Office Bot",
+        "model": "ollama-a:3b",
+        "system_prompt": "You greet patients and book visits.",
+        "temperature": 0.4, "top_p": 0.85, "max_tokens": 1024,
+        "backend_id": 1,
+    }).json()
+    try:
+        r = client.get(f"/api/conversations/{c['id']}/export")
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"].startswith("application/json"), r.headers
+        assert ".miniclosed-bot.json" in r.headers.get("content-disposition", ""), r.headers
+        j = r.json()
+        assert j["format"] == "miniclosed-bot"
+        assert j["format_version"] == 1
+        assert j["bot"]["title"] == "Doctor's Office Bot"
+        assert j["bot"]["model"] == "ollama-a:3b"
+        assert j["bot"]["system_prompt"].startswith("You greet")
+        assert j["bot"]["params"]["temperature"] == 0.4
+        # Critical: no backend_id, no DB ids — those are per-instance.
+        assert "backend_id" not in j["bot"]
+        assert "id" not in j["bot"]
+        # Default include_history=false leaves messages empty even if present.
+        assert j["sample_messages"] == []
+    finally:
+        client.delete(f"/api/conversations/{c['id']}")
+
+
+@test("bot export: include_history=true carries the message history")
+def _():
+    cid = _seed_conv_with_turn("export-history")
+    try:
+        r = client.get(f"/api/conversations/{cid}/export?include_history=true")
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert isinstance(j["sample_messages"], list)
+        assert len(j["sample_messages"]) >= 2, f"expected at least the seeded turn, got {j['sample_messages']}"
+        roles = [m.get("role") for m in j["sample_messages"]]
+        assert "user" in roles and "assistant" in roles
+    finally:
+        client.delete(f"/api/conversations/{cid}")
+
+
+@test("bot export: 404 on missing conversation")
+def _():
+    r = client.get("/api/conversations/9999999/export")
+    assert r.status_code == 404, r.text
+
+
+@test("bot import: round-trip — export then import creates a new conv on a matching backend")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    src = client.post("/api/conversations", json={
+        "title": "Roundtrip Bot",
+        "model": "ollama-a:3b",
+        "system_prompt": "Be terse.",
+        "temperature": 0.3,
+        "backend_id": 1,
+    }).json()
+    try:
+        export = client.get(f"/api/conversations/{src['id']}/export").json()
+        r = client.post("/api/conversations/import", json={"data": export})
+        assert r.status_code == 201, r.text
+        body = r.json()
+        new_id = body["id"]
+        try:
+            assert body["matched_backend_id"] == 1, body
+            # Title collides with the source — server appends a suffix.
+            assert body["title"].startswith("Roundtrip Bot"), body
+            assert body["title"] != "Roundtrip Bot", "title collision should have been bumped"
+            # Conversation row matches the export contents.
+            new = client.get(f"/api/conversations/{new_id}").json()
+            assert new["model"] == "ollama-a:3b"
+            assert new["system_prompt"] == "Be terse."
+            assert new["params"]["temperature"] == 0.3
+            assert new["backend_id"] == 1
+        finally:
+            client.delete(f"/api/conversations/{new_id}")
+    finally:
+        client.delete(f"/api/conversations/{src['id']}")
+
+
+@test("bot import: 409 needs_backend when no enabled backend serves the model")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    export = {
+        "format": "miniclosed-bot",
+        "format_version": 1,
+        "bot": {
+            "title": "Unmatched Bot",
+            "model": "no-such-model:99b",
+            "system_prompt": "Hi.",
+            "params": {"temperature": 0.5},
+        },
+        "sample_messages": [],
+    }
+    r = client.post("/api/conversations/import", json={"data": export})
+    assert r.status_code == 409, r.text
+    body = r.json()
+    assert body.get("needs_backend") is True, body
+    assert body.get("model") == "no-such-model:99b"
+    assert isinstance(body.get("available_backends"), list)
+    # Built-in Ollama backend should appear in the candidate list (even if it
+    # doesn't have the model).
+    assert any(b["id"] == 1 for b in body["available_backends"]), body
+    assert all(b["model_present"] is False for b in body["available_backends"]), body
+
+
+@test("bot import: explicit backend_id bypasses model auto-match")
+def _():
+    _reseed_builtin_to_fake_ollama()
+    export = {
+        "format": "miniclosed-bot",
+        "format_version": 1,
+        "bot": {
+            "title": "Forced Bot",
+            "model": "no-such-model:99b",  # would 409 without backend_id
+            "system_prompt": "Forced.",
+            "params": {},
+        },
+    }
+    r = client.post("/api/conversations/import", json={"data": export, "backend_id": 1})
+    assert r.status_code == 201, r.text
+    new_id = r.json()["id"]
+    try:
+        new = client.get(f"/api/conversations/{new_id}").json()
+        assert new["backend_id"] == 1
+        assert new["model"] == "no-such-model:99b"
+    finally:
+        client.delete(f"/api/conversations/{new_id}")
+
+
+@test("bot import: malformed payload rejected with 400")
+def _():
+    # Missing format
+    r = client.post("/api/conversations/import", json={"data": {"bot": {}}})
+    assert r.status_code == 400, r.text
+    # Wrong format string
+    r = client.post("/api/conversations/import",
+                    json={"data": {"format": "something-else", "format_version": 1, "bot": {}}})
+    assert r.status_code == 400, r.text
+    # Missing bot.model
+    r = client.post("/api/conversations/import", json={"data": {
+        "format": "miniclosed-bot", "format_version": 1, "bot": {"title": "x"}
+    }})
+    assert r.status_code == 400, r.text
+    # Future format_version
+    r = client.post("/api/conversations/import", json={"data": {
+        "format": "miniclosed-bot", "format_version": 99, "bot": {"model": "m"}
+    }})
+    assert r.status_code == 400, r.text
+
+
 # ==================================================================
 # Main
 # ==================================================================

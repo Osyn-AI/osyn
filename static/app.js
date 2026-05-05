@@ -1652,9 +1652,11 @@ async function clearCurrentConversation() {
 // popover; clicking any menu item triggers the corresponding download via
 // Content-Disposition.
 const _DOWNLOAD_PATHS = {
-  csv:      "export.csv",            // text-only input,output CSV
-  zip:      "export.zip",            // multimodal SFT (JSONL + images)
-  classify: "export.classify.zip",   // image-classification (CSV + images)
+  csv:                "export.csv",                  // text-only input,output CSV
+  zip:                "export.zip",                  // multimodal SFT (JSONL + images)
+  classify:           "export.classify.zip",         // image-classification (CSV + images)
+  "bot-config":       "export?include_history=false",        // portable config-only JSON
+  "bot-with-history": "export?include_history=true",         // portable config + messages
 };
 
 function _downloadCurrentConversation(format) {
@@ -2847,6 +2849,131 @@ function initUpgradeUI() {
   }, 10 * 60 * 1000);
 }
 
+// =====================================================================
+// Bot import — file picker → POST /api/conversations/import. Two paths:
+//   (a) server auto-matches a backend → 201, switch to the new bot.
+//   (b) server returns 409 needs_backend → modal with the candidate list.
+// =====================================================================
+
+let _importPending = null;  // { data, available_backends } while picker is up
+
+function _openImportPickerModal() {
+  document.getElementById("import-modal-backdrop")?.classList.remove("hidden");
+}
+
+function _closeImportPickerModal() {
+  document.getElementById("import-modal-backdrop")?.classList.add("hidden");
+  _importPending = null;
+  const confirmBtn = document.getElementById("import-confirm-btn");
+  if (confirmBtn) confirmBtn.disabled = true;
+}
+
+function _renderImportPickerBody(parsed, payload) {
+  const body = document.getElementById("import-modal-body");
+  const confirmBtn = document.getElementById("import-confirm-btn");
+  if (!body) return;
+  const wantedModel = payload.model || "(unknown)";
+  const backends = payload.available_backends || [];
+  const lines = backends.length
+    ? backends.map(b => {
+        const label = `${b.name} (${b.kind})${b.model_present ? " — has the model" : ` — ${b.model_count} models, none match`}`;
+        return `<label style="display:block; padding:6px 0;">
+          <input type="radio" name="import-backend" value="${b.id}" ${b.model_present ? "checked" : ""} />
+          ${label}
+        </label>`;
+      }).join("")
+    : `<p>No enabled backends found. Add one from Settings, then retry.</p>`;
+  body.innerHTML = `
+    <p>This bot wants model <code>${wantedModel}</code>, but no enabled backend currently advertises it. Pick a backend to use anyway:</p>
+    ${lines}
+    <p style="color: var(--text-muted); font-size: 12px; margin-top: 10px;">
+      Tip: choose a backend that has the same or a closely-related model. The imported bot will run against whichever backend you pick.
+    </p>`;
+  if (confirmBtn) {
+    confirmBtn.disabled = !backends.some(b => b.model_present);
+    body.querySelectorAll('input[name="import-backend"]').forEach(r => {
+      r.addEventListener("change", () => { confirmBtn.disabled = false; });
+    });
+  }
+}
+
+async function _runImport(data, backendId) {
+  const r = await fetch("/api/conversations/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data, backend_id: backendId }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (r.status === 201) {
+    if (body.warnings && body.warnings.length) {
+      console.warn("import warnings:", body.warnings);
+    }
+    await loadConversations();
+    if (body.id) await openConversation(body.id);
+    return { ok: true };
+  }
+  if (r.status === 409 && body.needs_backend) {
+    return { needsBackend: true, payload: body };
+  }
+  return { ok: false, error: body.detail || `HTTP ${r.status}` };
+}
+
+async function _handleImportFile(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch (e) {
+    alert(`Couldn't parse ${file.name} as JSON: ${e.message}`);
+    return;
+  }
+  if (parsed?.format !== "miniclosed-bot") {
+    alert(`Not a MiniClosedAI bot file (format=${parsed?.format ?? "missing"}).`);
+    return;
+  }
+  const result = await _runImport(parsed, null);
+  if (result.ok) return;
+  if (result.needsBackend) {
+    _importPending = { data: parsed, payload: result.payload };
+    _renderImportPickerBody(parsed, result.payload);
+    _openImportPickerModal();
+    return;
+  }
+  alert(`Import failed: ${result.error}`);
+}
+
+function initImportBotUI() {
+  const btn = document.getElementById("import-bot-btn");
+  const input = document.getElementById("import-bot-file");
+  const closeBtn = document.getElementById("import-modal-close");
+  const cancelBtn = document.getElementById("import-cancel-btn");
+  const confirmBtn = document.getElementById("import-confirm-btn");
+  const backdrop = document.getElementById("import-modal-backdrop");
+
+  if (btn && input) {
+    btn.addEventListener("click", () => input.click());
+    input.addEventListener("change", async () => {
+      const f = input.files && input.files[0];
+      input.value = "";  // reset so picking the same file twice still fires change
+      if (f) await _handleImportFile(f);
+    });
+  }
+  if (closeBtn) closeBtn.addEventListener("click", _closeImportPickerModal);
+  if (cancelBtn) cancelBtn.addEventListener("click", _closeImportPickerModal);
+  if (backdrop) backdrop.addEventListener("click", e => {
+    if (e.target === backdrop) _closeImportPickerModal();
+  });
+  if (confirmBtn) confirmBtn.addEventListener("click", async () => {
+    if (!_importPending) return;
+    const picked = document.querySelector('input[name="import-backend"]:checked');
+    if (!picked) return;
+    const backendId = parseInt(picked.value, 10);
+    const data = _importPending.data;
+    _closeImportPickerModal();
+    const result = await _runImport(data, backendId);
+    if (!result.ok) alert(`Import failed: ${result.error || "unknown"}`);
+  });
+}
+
 async function init() {
   initTheme();
   initSidebarToggle();
@@ -2862,6 +2989,7 @@ async function init() {
   if (typeof initBackendsUI === "function") initBackendsUI();
   startPullPoller();
   initUpgradeUI();
+  initImportBotUI();
   els.input.addEventListener("input", autoGrowInput);
   await loadModels();
   await loadConversations();

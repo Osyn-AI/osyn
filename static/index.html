@@ -59,6 +59,12 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
       </button>
 
+      <button id="import-bot-btn" class="icon-btn" data-tooltip="Import bot from .miniclosed-bot.json" aria-label="Import bot">
+        <!-- Upload-cloud icon -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+      </button>
+      <input id="import-bot-file" type="file" accept=".json,application/json" hidden />
+
       <button id="clear-chat-btn" class="icon-btn" data-tooltip="Clear messages (keep model + system prompt)" aria-label="Clear messages">
         <!-- Rotate-ccw: reset / start fresh -->
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
@@ -81,6 +87,14 @@
           <button type="button" class="download-menu-item" data-format="classify" role="menuitem">
             <strong>Image classification (ZIP)</strong>
             <span>image,label CSV + images/. For data labeling — typed text is ignored, text-only pairs are skipped.</span>
+          </button>
+          <button type="button" class="download-menu-item" data-format="bot-config" role="menuitem">
+            <strong>Bot config (JSON)</strong>
+            <span>Portable .miniclosed-bot.json — share this bot's prompt + params with another instance.</span>
+          </button>
+          <button type="button" class="download-menu-item" data-format="bot-with-history" role="menuitem">
+            <strong>Bot config + history (JSON)</strong>
+            <span>Same as above, plus conversation messages. Bigger file (attachments inline as base64).</span>
           </button>
         </div>
       </div>
@@ -345,6 +359,22 @@
       <div class="upgrade-modal-actions">
         <button type="button" id="upgrade-cancel-btn" class="btn btn-small">Cancel</button>
         <button type="button" id="upgrade-run-btn" class="btn btn-primary btn-small">Run upgrade</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="import-modal-backdrop" class="modal-backdrop hidden">
+    <div class="modal upgrade-modal">
+      <div class="modal-header">
+        <h3>Import bot — pick a backend</h3>
+        <button id="import-modal-close" class="icon-btn" data-tooltip="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="import-modal-body" class="upgrade-modal-body"></div>
+      <div class="upgrade-modal-actions">
+        <button type="button" id="import-cancel-btn" class="btn btn-small">Cancel</button>
+        <button type="button" id="import-confirm-btn" class="btn btn-primary btn-small" disabled>Import</button>
       </div>
     </div>
   </div>
