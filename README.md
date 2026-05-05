@@ -74,12 +74,14 @@ Built with **FastAPI** (3 Python deps), vanilla JS, and SQLite. Runs on a laptop
 11. [Recipes — common bot patterns](#recipes--common-bot-patterns)
 12. [Getting good responses from small models](#getting-good-responses-from-small-models)
 13. [Curating fine-tuning data](#curating-fine-tuning-data)
-14. [LAN access](#lan-access)
-15. [Troubleshooting](#troubleshooting)
-16. [Testing](#testing)
-17. [Project layout](#project-layout)
-18. [Security](#security)
-19. [License](#license)
+14. [Sharing bots between instances](#sharing-bots-between-instances)
+15. [Upgrading MiniClosedAI](#upgrading-miniclosedai)
+16. [LAN access](#lan-access)
+17. [Troubleshooting](#troubleshooting)
+18. [Testing](#testing)
+19. [Project layout](#project-layout)
+20. [Security](#security)
+21. [License](#license)
 
 ---
 
@@ -1668,6 +1670,68 @@ Every edited message preserves its *first* stored version under `original_conten
 - **DPO dataset construction.** When you outgrow SFT, you already have `(prompt, chosen=edited_content, rejected=original_content)` triples sitting in your database. A short script over the `messages` JSON emits them as a DPO JSONL file without any new UI work.
 
 That's the full curation story: start with demonstrations today; the preference-data upgrade is a data-transformation away, not a product rebuild.
+
+---
+
+## Sharing bots between instances
+
+A bot in MiniClosedAI is a row in the `conversations` table — title, model name, system prompt, sampling params, optional message history. To move that configuration to another machine (a teammate's laptop, a production box, a fresh install), export it as a `.miniclosed-bot.json` file and import it on the other side.
+
+**What's in the file** — only the bot's own configuration:
+
+- `title`, `model` (as a string, not a backend ID), `system_prompt`, `params` (temperature, top_p, max_tokens, top_k, thinking flags)
+- Optionally `sample_messages` — the conversation history, if you exported with the "+ history" option
+
+**What's deliberately NOT in the file**:
+
+- No backend rows. The importing instance uses *its own* registered backends.
+- No API keys or credentials of any kind.
+- No DB ids — the importer assigns fresh ones.
+
+That makes the file safe to share over Slack / email / git without leaking secrets.
+
+### Export from the GUI
+
+1. Open the bot you want to share.
+2. Click the **download icon** in the top toolbar.
+3. From the popover, pick **Bot config (JSON)** (small file, just the configuration) or **Bot config + history (JSON)** (also includes message history — bigger if there are image attachments).
+4. The browser downloads `<bot-title>.miniclosed-bot.json`.
+
+> **Note:** the bot must be saved (have at least one message exchange) before export is available.
+
+### Import from the GUI
+
+1. Click the **upload-cloud icon** next to "+ New Chat" in the top toolbar.
+2. Pick the `.miniclosed-bot.json` file.
+3. The server scans your enabled backends and auto-matches one whose model list contains the requested model name. If a match is found, the new bot opens automatically.
+4. If no enabled backend serves the requested model, a picker modal lists all your backends and shows which ones have the model. Pick one and click **Import** — the bot will run against whichever backend you choose, even if the model name doesn't match (useful if the original used `qwen3:8b` and you want to run it against a similar model on a different backend).
+
+### Round-trip via API
+
+```bash
+# On instance A: export
+curl -o doctor.miniclosed-bot.json \
+  http://localhost:8095/api/conversations/3/export
+
+# Optionally include conversation history:
+curl -o doctor-full.miniclosed-bot.json \
+  "http://localhost:8095/api/conversations/3/export?include_history=true"
+
+# On instance B: import (auto-match backend)
+curl -X POST http://localhost:8095/api/conversations/import \
+  -H "Content-Type: application/json" \
+  -d "{\"data\": $(cat doctor.miniclosed-bot.json)}"
+# → 201 { "id": 14, "title": "Doctor's Office Bot", "matched_backend_id": 1, "warnings": [] }
+
+# On instance B: import with explicit backend (skip auto-match)
+curl -X POST http://localhost:8095/api/conversations/import \
+  -H "Content-Type: application/json" \
+  -d "{\"data\": $(cat doctor.miniclosed-bot.json), \"backend_id\": 4}"
+```
+
+If the import returns **409 needs_backend**, the response body includes an `available_backends` array — pick one's `id` and retry the POST with `backend_id` set. Title collisions get a numeric suffix (`"Doctor's Office Bot (2)"`); imports never overwrite existing rows.
+
+Full schema reference — every field, every error case, and the resolution-flow diagram — lives in [DOCUMENTATION.md → Bot import / export](./DOCUMENTATION.md#bot-import--export).
 
 ---
 
