@@ -1,53 +1,57 @@
-# MiniClosedAI
+# Osyn
 
-A tiny, 100%-local LLM playground. Chat with small Ollama models (1B–10B parameters), tweak sampling parameters live, and turn each saved chat into a callable API endpoint. **No cloud, no API keys, no costs.**
+**Run AI on your infrastructure. Without sending your data anywhere.**
 
-Built with **FastAPI** (3 Python deps), vanilla JS, and SQLite. Runs on a laptop.
+Osyn is a local AI runtime that lets companies and developers deploy private AI over their own data — no cloud dependency, no data leaving your environment, no vendor lock-in. Compatible with any OpenAI SDK out of the box.
+
+> Osyn is built on top of [MiniClosedAI](https://github.com/edantonio505/miniclosedai), an open-source local LLM playground. Osyn layers enterprise packaging, managed implementation, and support on top of this foundation.
+
+Built with **FastAPI**, vanilla JS, and SQLite. Runs on a laptop or your own server.
 
 <p align="center">
-  <img src="miniclsedai1.png"
-       alt="MiniClosedAI — a saved Pikachu bot responding to a message, with system prompt and parameters visible in the sidebar"
+  <img src="osyn1.png"
+       alt="Osyn — a saved Pikachu bot responding to a message, with system prompt and parameters visible in the sidebar"
        width="820">
   <br><em>A saved bot. The sidebar is the full control panel; the chat is the live test.</em>
 </p>
 
 <p align="center">
-  <img src="miniclosedai2.png"
+  <img src="osyn2.png"
        alt="Sentiment classifier bot: a reasoning model's 'Thoughts' block is expanded above the final one-word answer ('positive')"
        width="820">
   <br><em>Reasoning models stream their chain-of-thought into a collapsible block, separate from the final answer.</em>
 </p>
 
 <p align="center">
-  <img src="miniclosedai3.png"
+  <img src="osyn3.png"
        alt="API Integration Code modal with three toggle groups — Language, Mode, Style — showing the JavaScript / Non-streaming / OpenAI-compat variant pointed at this instance"
        width="820">
   <br><em>Every saved chat is a microservice. Copy the snippet as cURL, Python, or JavaScript — native or OpenAI-SDK-compatible.</em>
 </p>
 
 <p align="center">
-  <img src="miniclosedai4.png"
+  <img src="osyn4.png"
        alt="Support Ticket Router bot: the sidebar shows the JSON-extraction system prompt and deterministic sampling params; the chat shows a real inbound ticket on the right and the assistant's pretty-printed, syntax-highlighted JSON response next to it"
        width="820">
   <br><em>The Support Ticket Router recipe in action. A real inbound ticket (top right) goes in; structured, pretty-printed, syntax-highlighted JSON comes out — ready for a downstream CRM, Linear, or Slack webhook to consume. Recipes for this and a sister <a href="#7-inbound-lead-qualifier--full-walkthrough">Lead Qualifier</a> bot are documented as standalone walkthroughs.</em>
 </p>
 
 <p align="center">
-  <img src="miniclosedai5.png"
+  <img src="osyn5.png"
        alt="Sentiment classifier chat with the header's download icon hovered, showing the tooltip 'Download this chat as CSV (input,output)' — saves the conversation as a two-column SFT dataset"
        width="820">
   <br><em>Every chat doubles as a fine-tuning dataset. The download icon in the header exports the conversation as a two-column <code>input,output</code> CSV — edited assistant responses become the ideal targets, ready for SFT. See <a href="#curating-fine-tuning-data">Curating fine-tuning data</a>.</em>
 </p>
 
 <p align="center">
-  <img src="miniclosedai6.png"
-       alt="MiniClosedAI Settings page with three registered LLM endpoints: Ollama (built-in) at localhost:11434 showing 23 reachable models, LM Studio at 192.168.0.110:1234/v1 with 7 models and an API key set, and Bonsai at localhost:8080/v1 with 1 model — each card has Edit and (for non-built-in) Delete buttons"
+  <img src="osyn6.png"
+       alt="Osyn Settings page with three registered LLM endpoints: Ollama (built-in) at localhost:11434 showing 23 reachable models, LM Studio at 192.168.0.110:1234/v1 with 7 models and an API key set, and Bonsai at localhost:8080/v1 with 1 model — each card has Edit and (for non-built-in) Delete buttons"
        width="820">
   <br><em>Settings → LLM Endpoints. Register as many backends as you want: the built-in Ollama, an LM Studio instance on your LAN, and PrismML's 1-bit Bonsai server all coexist. Each card shows its kind, base URL, API-key status, and a live reachability count. Models from every reachable endpoint merge into one grouped dropdown on the Dashboard, OpenWebUI-style. See <a href="#connecting-lm-studio-and-other-openai-compatible-endpoints">Connecting LM Studio and other endpoints</a> and <a href="#adding-bonsai-prismmls-1-bit-8b--step-by-step">Adding Bonsai</a>.</em>
 </p>
 
 <p align="center">
-  <img src="miniclosedai7.png"
+  <img src="osyn7.png"
        alt="Doctor's Office Bot chat running on qwen3:8b. The sidebar shows the system prompt with the 'Required-fields gate (HARD RULE)' section visible. The chat shows the bot asking for patient details, the user's one-shot info-dump reply ('Ed Johnson, 1989-02-23, (347) 853-8734, new patient. Routine checkup, any available provider. Morning works best...'), and the bot's response — a natural confirmation sentence followed by a fenced create_appointment JSON block rendered as a code block in the chat, containing patient, visit, insurance, and confirmation sub-objects"
        width="820">
   <br><em>A conversational bot that emits structured actions. The <a href="#9-doctors-office-chatbot--full-walkthrough">Doctor's Office Bot</a> replies in natural language during info gathering, then emits a fenced <code>create_appointment</code> JSON block the moment every required field is present. Downstream apps strip the fence and dispatch to the real scheduler. Works with <code>qwen3:8b</code> on Ollama — full system prompt, worked examples, and the load-bearing few-shot section in <a href="./Doctors%20Office%20Bot.md"><code>Doctors Office Bot.md</code></a>.</em>
@@ -75,7 +79,7 @@ Built with **FastAPI** (3 Python deps), vanilla JS, and SQLite. Runs on a laptop
 12. [Getting good responses from small models](#getting-good-responses-from-small-models)
 13. [Curating fine-tuning data](#curating-fine-tuning-data)
 14. [Sharing bots between instances](#sharing-bots-between-instances)
-15. [Upgrading MiniClosedAI](#upgrading-miniclosedai)
+15. [Upgrading Osyn](#upgrading-osyn)
 16. [LAN access](#lan-access)
 17. [Troubleshooting](#troubleshooting)
 18. [Testing](#testing)
@@ -87,7 +91,7 @@ Built with **FastAPI** (3 Python deps), vanilla JS, and SQLite. Runs on a laptop
 
 ## What it is
 
-MiniClosedAI is a single-user, single-process web app that wraps **local** LLMs into a playground UI. Its feature list is short on purpose:
+Osyn is a local AI runtime that wraps **local** LLMs into a private, self-hosted environment. Its feature list is short on purpose:
 
 - 🧠 **100% local inference** — no data leaves your machine.
 - 🔌 **Multi-endpoint, OpenWebUI-style** — register Ollama plus any number of OpenAI-compatible servers (LM Studio, vLLM, [PrismML Bonsai (1-bit 8B)](https://github.com/PrismML-Eng/Bonsai-demo), raw `llama.cpp --server`, etc.). One grouped model dropdown lists everything; each saved chat picks one endpoint + model.
@@ -96,12 +100,12 @@ MiniClosedAI is a single-user, single-process web app that wraps **local** LLMs 
 - 💭 **Reasoning-model aware** — `thinking` and `content` tokens from models like qwen3, deepseek-r1, and gpt-oss stream separately; "thoughts" appear in a collapsible block. `max_thinking_tokens` is a soft cap: visible reasoning is hidden but the model keeps running so the answer still arrives.
 - 📎 **File attachments — images, PDFs, and text files** — paperclip in the composer (and clipboard paste) attaches files to a chat turn. Vision models (`llava`, `gemma4`, `qwen3.6`, `*-vision`, `*-vl`, etc.) see images natively over both Ollama's `/api/chat` and OpenAI's `chat/completions` formats. PDFs are extracted to text server-side with `pypdf` (50-page / 30 000-char caps), and `.txt` / `.md` / `.csv` / source-code files are read inline. Attached file bodies get prepended to the user's message; the bubble shows just the user's question + thumbnails / doc chips. Soft-warns when an image is attached to a model that doesn't pattern-match a vision model. **No extra setup** — `pypdf` ships in `requirements.txt`.
 - ⏹ **Manual stop** — a Stop button in the composer aborts the stream cleanly.
-- 🔁 **OpenAI-SDK-compatible server** — drop MiniClosedAI in place of `api.openai.com` with a one-line `base_url` change. Every bot appears as a "model" to the SDK; calls route to whichever backend that bot is pinned to.
+- 🔁 **OpenAI-SDK-compatible server** — drop Osyn in place of `api.openai.com` with a one-line `base_url` change. Every bot appears as a "model" to the SDK; calls route to whichever backend that bot is pinned to.
 - 🎨 **Polished UI** — left activity bar (Dashboard / Settings), Light / Dark / System theme, draggable splitters (sidebar width + system-prompt height), Gemini-style empty state, syntax-highlighted API-code modal with Streaming/Non-streaming and Native/OpenAI variants.
 - 🗂️ **SQLite persistence** — one file, two tables (`backends`, `conversations`), JSON columns for messages. Delete to reset, copy to migrate.
 - 🧪 **Fine-tuning data curation built-in** — edit any assistant response in place to turn it into the ideal output, then download the whole conversation as a two-column `input,output` CSV ready for SFT. The original pristine response is preserved under `original_content` for audit / DPO later.
 
-**What it is not:** a production inference platform. No authentication, no rate limiting, no multi-user. Intended for localhost or a trusted LAN.
+**What it is not (yet):** a production inference platform. No authentication, no rate limiting, no multi-user in this open-source version. Intended for localhost, a trusted LAN, or internal deployment. Enterprise features (managed implementation, connectors, compliance documentation, multi-user) are on the roadmap — [contact us](https://osyn.ai) if you need them today.
 
 ---
 
@@ -136,7 +140,7 @@ Lite mode is the right pick when you have an inference server *somewhere else* �
 
 ### Docker quick start (with baked models)
 
-One-command setup that boots MiniClosedAI **and** Ollama with three small-but-capable models (`llama3.2:3b`, `qwen2.5:3b`, `gemma2:2b` — about 5.5 GB of weights) already on disk inside the image. No `ollama pull` step. No host Ollama install. Works on any Linux with Docker + NVIDIA GPU; CPU-only fallback below.
+One-command setup that boots Osyn **and** Ollama with three small-but-capable models (`llama3.2:3b`, `qwen2.5:3b`, `gemma2:2b` — about 5.5 GB of weights) already on disk inside the image. No `ollama pull` step. No host Ollama install. Works on any Linux with Docker + NVIDIA GPU; CPU-only fallback below.
 
 #### Requirements
 
@@ -149,7 +153,7 @@ One-command setup that boots MiniClosedAI **and** Ollama with three small-but-ca
 #### Bring it up
 
 ```bash
-git clone https://github.com/edantonio505/miniclosedai.git && cd miniclosedai
+git clone https://github.com/Osyn-AI/osyn.git && cd osyn
 docker compose up -d --build
 ```
 
@@ -180,19 +184,19 @@ docker compose exec ollama ollama rm phi3:mini
 docker compose exec ollama ollama list
 ```
 
-Refresh the MiniClosedAI page — the dropdown updates automatically (the app re-queries `/api/tags` on each page load).
+Refresh the Osyn page — the dropdown updates automatically (the app re-queries `/api/tags` on each page load).
 
 #### What's persisted and what isn't
 
 | Data | Where | Survives `down` | Survives `down -v` |
 |---|---|---|---|
-| Chat history, saved bot configs, backends table | `miniclosedai_db` volume → `/app/data/miniclosedai.db` | ✅ | ❌ |
+| Chat history, saved bot configs, backends table | `osyn_db` volume → `/app/data/osyn.db` | ✅ | ❌ |
 | Runtime-pulled models | `ollama_models` volume → `/root/.ollama` | ✅ | ❌ |
 | Baked models | Ollama image layer | ✅ (comes back on next build/up) | ✅ |
 
 #### Security — loopback-only by default
 
-The compose file binds MiniClosedAI to `127.0.0.1:8095:8095` — **accessible only from localhost**. MiniClosedAI has zero authentication. To expose the UI to your LAN (phones, other machines), change the port mapping to `"8095:8095"` and read the [LAN access](#lan-access) + [Security](#security) sections first.
+The compose file binds Osyn to `127.0.0.1:8095:8095` — **accessible only from localhost**. Osyn has zero authentication. To expose the UI to your LAN (phones, other machines), change the port mapping to `"8095:8095"` and read the [LAN access](#lan-access) + [Security](#security) sections first.
 
 #### Troubleshooting Docker
 
@@ -201,15 +205,15 @@ The compose file binds MiniClosedAI to `127.0.0.1:8095:8095` — **accessible on
 | `could not select device driver "nvidia"` | `nvidia-container-toolkit` not installed. `sudo apt install nvidia-container-toolkit && sudo systemctl restart docker`. |
 | Build fails with `ENOSPC` during `ollama pull` | Free disk space on Docker's `data-root` (`docker system df`, then `docker system prune`). Need ~15 GB headroom. |
 | Stack up but UI shows empty model dropdown | `docker compose exec ollama ollama list` — confirms the models baked in. If list is empty, one of the build's `bake-models.sh` layers silently failed; `docker compose build --no-cache ollama` to rebuild. |
-| `miniclosedai` can't reach `ollama` | Verify the env var: `docker compose exec miniclosedai env \| grep OLLAMA_URL` — must be `http://ollama:11434`. If it's `http://localhost:...`, the container isn't inheriting the compose env. |
+| `osyn` can't reach `ollama` | Verify the env var: `docker compose exec osyn env \| grep OLLAMA_URL` — must be `http://ollama:11434`. If it's `http://localhost:...`, the container isn't inheriting the compose env. |
 | Switching GPUs ↔ CPU doesn't take effect | Docker caches a lot. `docker compose down && docker compose up -d --build` to force. |
 
 ### Docker — lite (no built-in Ollama)
 
-Single-service compose file. Brings up **only** the MiniClosedAI web app (~160 MB image) — no Ollama container, no GPU passthrough, no `nvidia-container-toolkit` requirement, no model layers. The dashboard starts empty; you register your external endpoint(s) through the Settings page and the dropdown lights up.
+Single-service compose file. Brings up **only** the Osyn web app (~160 MB image) — no Ollama container, no GPU passthrough, no `nvidia-container-toolkit` requirement, no model layers. The dashboard starts empty; you register your external endpoint(s) through the Settings page and the dropdown lights up.
 
 ```bash
-git clone https://github.com/edantonio505/miniclosedai.git && cd miniclosedai
+git clone https://github.com/Osyn-AI/osyn.git && cd osyn
 docker compose -f docker-compose.lite.yml up -d --build
 # → open http://127.0.0.1:8095
 # → click ⚙️ Settings → Add endpoint
@@ -224,7 +228,7 @@ Build is ~30 seconds (one Python deps layer, no model pulls). The compose file s
 | You don't want a 10 GB image to build/store. | You want zero external dependencies. |
 | Your hardware can't run a 7–9B model locally. | Your hardware can. |
 
-To switch back to the heavy default later, just bring the lite stack down and start the standard one — the SQLite DB lives in the same `miniclosedai_db` volume, so your conversations persist:
+To switch back to the heavy default later, just bring the lite stack down and start the standard one — the SQLite DB lives in the same `osyn_db` volume, so your conversations persist:
 
 ```bash
 docker compose -f docker-compose.lite.yml down
@@ -272,10 +276,10 @@ ollama pull gemma2:2b         # very fast, ~1.6 GB
 
 Full list of recommended models is below.
 
-### 3. MiniClosedAI
+### 3. Osyn
 
 ```bash
-cd miniclosedai
+cd osyn
 python -m venv .venv
 source .venv/bin/activate             # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -286,7 +290,7 @@ pip install -r requirements.txt
 If you don't want to install Ollama on this machine — for example, you'll point at a remote Ollama, an LM Studio on your LAN, or any OpenAI-compatible endpoint — **skip steps 1 and 2 above and run just step 3**, then start the app with the `MINICLOSEDAI_NO_OLLAMA=1` env var:
 
 ```bash
-git clone https://github.com/edantonio505/miniclosedai.git && cd miniclosedai
+git clone https://github.com/Osyn-AI/osyn.git && cd osyn
 python -m venv .venv
 source .venv/bin/activate             # Windows: .venv\Scripts\activate
 pip install -r requirements.txt       # 5 deps total, no system packages
@@ -317,7 +321,7 @@ Other env vars you may want for the lite setup:
 
 | Var | Purpose |
 |---|---|
-| `MINICLOSEDAI_DB_PATH` | Override where the SQLite DB lives. Default: `./miniclosedai.db` next to `app.py`. |
+| `MINICLOSEDAI_DB_PATH` | Override where the SQLite DB lives. Default: `./osyn.db` next to `app.py`. |
 | `OLLAMA_URL` | The default seeded URL for the built-in Ollama row when it *does* get seeded. Irrelevant in lite mode. |
 
 ---
@@ -453,7 +457,7 @@ Copy button works on both HTTPS/localhost (via `navigator.clipboard`) and plain-
 
 ## Connecting LM Studio and other OpenAI-compatible endpoints
 
-MiniClosedAI ships with **Ollama as a built-in endpoint** and lets you register any number of additional **OpenAI-compatible** servers alongside it: [LM Studio](https://lmstudio.ai), [vLLM](https://docs.vllm.ai), `llama.cpp`'s `server` binary, [Text Generation WebUI](https://github.com/oobabooga/text-generation-webui)'s OpenAI extension, or the real OpenAI API itself if you want.
+Osyn ships with **Ollama as a built-in endpoint** and lets you register any number of additional **OpenAI-compatible** servers alongside it: [LM Studio](https://lmstudio.ai), [vLLM](https://docs.vllm.ai), `llama.cpp`'s `server` binary, [Text Generation WebUI](https://github.com/oobabooga/text-generation-webui)'s OpenAI extension, or the real OpenAI API itself if you want.
 
 Each saved conversation picks one endpoint + one model; the Dashboard's model dropdown groups everything into a single OpenWebUI-style `<optgroup>` picker so you can chat with a Qwen3.6 on LM Studio and a Llama3.2 on Ollama in separate tabs without swapping anything.
 
@@ -461,7 +465,7 @@ Each saved conversation picks one endpoint + one model; the Dashboard's model dr
 
 1. **In LM Studio**, open the *Developer* tab → turn on **Start Server** (port 1234 by default). Load at least one model from the chat sidebar so `/v1/models` has something to list.
 2. *(Optional)* Decide whether to gate the endpoint with an API key. For localhost-only use, turn *Require API key* **off** — easier. For LAN use with a key, copy the token LM Studio shows you.
-3. **In MiniClosedAI**, click the **Settings** icon (gear, bottom of the activity bar) → **+ Add endpoint**. Fill in:
+3. **In Osyn**, click the **Settings** icon (gear, bottom of the activity bar) → **+ Add endpoint**. Fill in:
    - **Name**: anything readable, e.g. `LM Studio`
    - **Kind**: *OpenAI-compatible*
    - **Base URL**: **`http://localhost:1234/v1`** (local) or `http://<lan-host>:1234/v1` (remote). **The `/v1` suffix is required** — without it, requests hit LM Studio's admin routes and return 0 models.
@@ -472,7 +476,7 @@ Each saved conversation picks one endpoint + one model; the Dashboard's model dr
 
 ### Adding Bonsai (PrismML's 1-bit 8B) — step by step
 
-**[PrismML Bonsai-8B](https://github.com/PrismML-Eng/Bonsai-demo)** is an extreme-quantization experiment: a 1-bit 8-billion-parameter model that ships at ~1.15 GB on disk (about **14× smaller** than the fp16 version of the same base architecture) while staying within striking distance of full-precision baselines on factual / reasoning benchmarks. It runs via `llama.cpp`'s `llama-server`, which speaks the OpenAI-compatible API natively — so it slots in as another endpoint in MiniClosedAI with no translation layer.
+**[PrismML Bonsai-8B](https://github.com/PrismML-Eng/Bonsai-demo)** is an extreme-quantization experiment: a 1-bit 8-billion-parameter model that ships at ~1.15 GB on disk (about **14× smaller** than the fp16 version of the same base architecture) while staying within striking distance of full-precision baselines on factual / reasoning benchmarks. It runs via `llama.cpp`'s `llama-server`, which speaks the OpenAI-compatible API natively — so it slots in as another endpoint in Osyn with no translation layer.
 
 **Useful links:**
 - **Repo & demo scripts:** [github.com/PrismML-Eng/Bonsai-demo](https://github.com/PrismML-Eng/Bonsai-demo)
@@ -502,7 +506,7 @@ BONSAI_MODEL=4B ./scripts/start_llama_server.sh
 
 **aarch64 / ARM**: the shipped binaries are x86_64. Build from source with `./scripts/build_cuda_linux.sh` (Linux+NVIDIA) or `./scripts/build_mac.sh` (macOS+Metal) before the `start_llama_server` step.
 
-#### 2. Register Bonsai as an endpoint in MiniClosedAI
+#### 2. Register Bonsai as an endpoint in Osyn
 
 Settings (gear icon, bottom of activity bar) → **+ Add endpoint**:
 
@@ -510,7 +514,7 @@ Settings (gear icon, bottom of activity bar) → **+ Add endpoint**:
 |---|---|
 | **Name** | `Bonsai` (or anything readable) |
 | **Kind** | **OpenAI-compatible** |
-| **Base URL** | **`http://localhost:8080/v1`** — local. For LAN, substitute the host's IP. **Do not confuse `8080` (Bonsai) with `8095` (MiniClosedAI itself)** — see the pitfall below. The `/v1` suffix is required. |
+| **Base URL** | **`http://localhost:8080/v1`** — local. For LAN, substitute the host's IP. **Do not confuse `8080` (Bonsai) with `8095` (Osyn itself)** — see the pitfall below. The `/v1` suffix is required. |
 | **API key** | *(leave blank — `llama.cpp --server` doesn't require auth by default)* |
 | **Extra headers** | *(leave empty)* |
 
@@ -526,16 +530,16 @@ The per-conv microservice pattern applies unchanged: `POST /api/conversations/{i
 
 #### Notes and gotchas specific to Bonsai
 
-- **Thinking: Off (or Default).** `start_llama_server.sh` already boots with `--reasoning-budget 0 --reasoning-format none --chat-template-kwargs '{"enable_thinking": false}'` — thinking is disabled upstream. Leave MiniClosedAI's Thinking control on `Off` or `Default` to match. Flipping it to `On` just wastes tokens; the server still won't emit reasoning.
-- **Context window.** Bonsai-8B is trained at 65,536 tokens; the start script uses llama.cpp's `-c 0` (auto-fit). For very long contexts your GPU VRAM will be the binding constraint, not MiniClosedAI.
-- **Server-side sampling defaults** (set in `start_llama_server.sh`): `temp=0.5`, `top-p=0.85`, `top-k=20`, `min-p=0`. MiniClosedAI's per-conversation sliders override these on every request, so tune per-chat as usual.
-- **Pitfall — wrong port = feedback loop.** If you accidentally set Bonsai's Base URL to `http://localhost:8095/v1` (MiniClosedAI's own port), the endpoint's `/v1/models` call loops back and returns *MiniClosedAI's saved conversations as "models"*. The model dropdown will show conversation IDs (e.g. `"30"`) under the Bonsai optgroup; picking one sends the chat through that conversation's bot instead of Bonsai, producing nonsensically on-topic responses (the Lead Qualifier's JSON, etc.). Fix: edit the endpoint, change the port to **`8080`**.
+- **Thinking: Off (or Default).** `start_llama_server.sh` already boots with `--reasoning-budget 0 --reasoning-format none --chat-template-kwargs '{"enable_thinking": false}'` — thinking is disabled upstream. Leave Osyn's Thinking control on `Off` or `Default` to match. Flipping it to `On` just wastes tokens; the server still won't emit reasoning.
+- **Context window.** Bonsai-8B is trained at 65,536 tokens; the start script uses llama.cpp's `-c 0` (auto-fit). For very long contexts your GPU VRAM will be the binding constraint, not Osyn.
+- **Server-side sampling defaults** (set in `start_llama_server.sh`): `temp=0.5`, `top-p=0.85`, `top-k=20`, `min-p=0`. Osyn's per-conversation sliders override these on every request, so tune per-chat as usual.
+- **Pitfall — wrong port = feedback loop.** If you accidentally set Bonsai's Base URL to `http://localhost:8095/v1` (Osyn's own port), the endpoint's `/v1/models` call loops back and returns *Osyn's saved conversations as "models"*. The model dropdown will show conversation IDs (e.g. `"30"`) under the Bonsai optgroup; picking one sends the chat through that conversation's bot instead of Bonsai, producing nonsensically on-topic responses (the Lead Qualifier's JSON, etc.). Fix: edit the endpoint, change the port to **`8080`**.
 - **Stop the server** when you're done: `kill $(lsof -ti TCP:8080)` (or `Ctrl+C` in the terminal you started it in).
 
 ### Using it
 
 - **Pick any external model** from the dropdown and chat normally. The bot saves the `(model, backend_id)` pair so the next time you open that conversation it routes to the correct endpoint automatically.
-- **API Code modal** emits snippets that call MiniClosedAI's `/api/conversations/{id}/chat` or `/v1/chat/completions`. Your downstream code talks to MiniClosedAI; MiniClosedAI relays to whichever endpoint the bot is pinned to.
+- **API Code modal** emits snippets that call Osyn's `/api/conversations/{id}/chat` or `/v1/chat/completions`. Your downstream code talks to Osyn; Osyn relays to whichever endpoint the bot is pinned to.
 - **Mix freely.** One bot on Ollama, another on LM Studio (different host on your LAN), a third on Bonsai, a fourth on vLLM — all callable from the same URL base.
 
 ### Reasoning models on LM Studio / vLLM
@@ -548,18 +552,18 @@ The **Thinking** sidebar control translates as follows when a conversation is bo
 | On | `chat_template_kwargs: {enable_thinking: true}` + `/think` appended to the last user message |
 | Low / Medium / High | `reasoning_effort: <value>` (gpt-oss family) |
 
-Whether the *server* honors these signals depends on the build. Newer vLLM and LM Studio versions respect `enable_thinking`; older ones don't. **If your model keeps reasoning after you set Thinking: Off, your LM Studio build is ignoring the flag** — MiniClosedAI has already sent it three different ways. The practical workaround is simple:
+Whether the *server* honors these signals depends on the build. Newer vLLM and LM Studio versions respect `enable_thinking`; older ones don't. **If your model keeps reasoning after you set Thinking: Off, your LM Studio build is ignoring the flag** — Osyn has already sent it three different ways. The practical workaround is simple:
 
 - **Use a reasoning model for reasoning tasks** with Thinking: On and no `max_thinking_tokens` cap — Qwen3.x, DeepSeek-R1, gpt-oss.
 - **Use a non-reasoning model for strict-output tasks** (JSON extractors, classifiers, one-word answers) — Gemma 4, Mistral, Llama 3.x, qwen2.5 variants.
 
-`max_thinking_tokens` is a **soft cap**: when exceeded, MiniClosedAI hides further reasoning from the UI but keeps the stream open so the model can finish and emit its actual answer. The banner reads *"✂ Thinking hidden after N tokens. Model still finishing its reasoning; the answer will follow."* The hard kill switch is **Max Tokens**.
+`max_thinking_tokens` is a **soft cap**: when exceeded, Osyn hides further reasoning from the UI but keeps the stream open so the model can finish and emit its actual answer. The banner reads *"✂ Thinking hidden after N tokens. Model still finishing its reasoning; the answer will follow."* The hard kill switch is **Max Tokens**.
 
 ### Managing endpoints
 
 From the Settings page:
 
-- **Test connection** (on each card or in the Add/Edit modal) probes the endpoint *through the MiniClosedAI server* — avoids browser CORS blocks on cross-origin calls to LM Studio.
+- **Test connection** (on each card or in the Add/Edit modal) probes the endpoint *through the Osyn server* — avoids browser CORS blocks on cross-origin calls to LM Studio.
 - **Edit** lets you change the name, URL, API key, or custom headers. `kind` is immutable once saved.
 - **Delete** removes a non-built-in endpoint. If any conversation is still bound to it, you get a 409 listing the conversations — rebind them first, then retry.
 - **The built-in Ollama endpoint** can be renamed or have its URL changed (useful if Ollama runs on a different port or host), but can't be deleted.
@@ -1110,7 +1114,7 @@ These require the full config in the request body (model, system_prompt, all sam
 
 ## OpenAI-compatible endpoint
 
-MiniClosedAI also serves an OpenAI-shape API so any OpenAI SDK works against it with a one-line base-URL change.
+Osyn also serves an OpenAI-shape API so any OpenAI SDK works against it with a one-line base-URL change.
 
 ```
 POST /v1/chat/completions         → OpenAI request/response shape
@@ -1200,7 +1204,7 @@ If your code already uses the OpenAI API:
 client = OpenAI(api_key="sk-...")
 client.chat.completions.create(model="gpt-4", ...)
 
-# After: local MiniClosedAI
+# After: local Osyn
 client = OpenAI(base_url="http://localhost:8095/v1", api_key="x")
 client.chat.completions.create(model="3", ...)     # your bot's chat id
 ```
@@ -1392,7 +1396,7 @@ A front-of-house chatbot for a primary-care practice. Answers FAQs from an expli
 {"type": "request_callback",         "patient": {...}, "topic": "...", "preferred_window": "..."}
 ```
 
-**Settings:** `qwen3:8b` on Ollama, temperature `0.3`, Thinking `Off`, max_tokens `600`. The MiniClosedAI UI sends `include_history: true` automatically so the model sees every prior turn. **Do not use Bonsai-8B (1-bit) for this bot** — verified live on this repo that 1-bit quantization drops the conditional JSON emission even with the few-shot-patched prompt. 1-bit is for single-mode classifiers (RAG Query Router, Ticket Router); mixed-mode needs full-precision 7–9B.
+**Settings:** `qwen3:8b` on Ollama, temperature `0.3`, Thinking `Off`, max_tokens `600`. The Osyn UI sends `include_history: true` automatically so the model sees every prior turn. **Do not use Bonsai-8B (1-bit) for this bot** — verified live on this repo that 1-bit quantization drops the conditional JSON emission even with the few-shot-patched prompt. 1-bit is for single-mode classifiers (RAG Query Router, Ticket Router); mixed-mode needs full-precision 7–9B.
 
 **Archetype:** *converse → gather → emit side effect*. Sits at the front door of a real website or patient portal. The bot is a chatbot for the user AND a microservice for your backend at the same time — dual-audience design. Includes hard guardrails (no medical advice, no policy invention, no prompt disclosure), a required-fields gate that prevents premature booking, and three load-bearing few-shot examples inside the system prompt (booking, red-flag, FAQ-out-of-scope) without which the JSON emission drops. Full system prompt, eight worked conversation examples (including an adversarial prompt-injection turn and an after-hours callback), Python session-state integration with regex-stripping of the fenced action block, and five domain variants (veterinary, dental, PT, mental-health, HVAC) in **[`Doctors Office Bot.md`](./Doctors%20Office%20Bot.md)**.
 
@@ -1505,7 +1509,7 @@ The UI reads `ollama list` at startup and auto-populates the model dropdown for 
 
 ## Curating fine-tuning data
 
-Every chat in MiniClosedAI is both a playground and a dataset-in-progress. The workflow is deliberately the simplest one that works for small high-quality SFT datasets: **demonstration data collection** — keep the real user prompts, rewrite imperfect assistant responses into the ideal ones, export the pairs as CSV.
+Every chat in Osyn is both a playground and a dataset-in-progress. The workflow is deliberately the simplest one that works for small high-quality SFT datasets: **demonstration data collection** — keep the real user prompts, rewrite imperfect assistant responses into the ideal ones, export the pairs as CSV.
 
 That's the whole loop. No separate rating UI. No thumbs-up/down table. No second sampling pass. The chat IS the dataset editor.
 
@@ -1520,7 +1524,7 @@ If you have **<5,000 pairs**, demonstration data is the canonical choice — it 
 
 ### The three-click curation loop
 
-1. **Run a normal chat.** Send the kinds of prompts you want the fine-tuned model to handle well. Use all the usual MiniClosedAI tools — sliders, system prompts, Thinking, different backends — to explore.
+1. **Run a normal chat.** Send the kinds of prompts you want the fine-tuned model to handle well. Use all the usual Osyn tools — sliders, system prompts, Thinking, different backends — to explore.
 
 2. **Hover any assistant response → click the pencil (top-right).** An inline textarea appears with the raw response. Rewrite it into the "ideal" version. Save (or `Ctrl/⌘+Enter`). The bubble re-renders with the new content, a small `edited` pill appears, and the pristine output is preserved under `original_content` server-side.
 
@@ -1534,7 +1538,7 @@ Repeat 1–2 as many times as you want before step 3. You can also edit user mes
 
 ```
 input,output
-"What does MiniClosedAI do?","MiniClosedAI wraps local LLMs in a playground UI and turns every chat into a callable API endpoint."
+"What does Osyn do?","Osyn wraps local LLMs in a playground UI and turns every chat into a callable API endpoint."
 "Summarize the support ticket below:\n\n<ticket text>","{""intent"":""bug"",""urgency"":""p1"",…}"
 ```
 
@@ -1675,7 +1679,7 @@ That's the full curation story: start with demonstrations today; the preference-
 
 ## Sharing bots between instances
 
-A bot in MiniClosedAI is a row in the `conversations` table — title, model name, system prompt, sampling params, optional message history. To move that configuration to another machine (a teammate's laptop, a production box, a fresh install), export it as a `.miniclosed-bot.json` file and import it on the other side.
+A bot in Osyn is a row in the `conversations` table — title, model name, system prompt, sampling params, optional message history. To move that configuration to another machine (a teammate's laptop, a production box, a fresh install), export it as a `.miniclosed-bot.json` file and import it on the other side.
 
 **What's in the file** — only the bot's own configuration:
 
@@ -1735,9 +1739,9 @@ Full schema reference — every field, every error case, and the resolution-flow
 
 ---
 
-## Upgrading MiniClosedAI
+## Upgrading Osyn
 
-Two ways to pull the latest from `https://github.com/edantonio505/miniclosedai`. Both are safe — every upgrade snapshots the current commit and **auto-rolls back** if the new code fails to start within 15 seconds.
+Two ways to pull the latest from `https://github.com/Osyn-AI/osyn`. Both are safe — every upgrade snapshots the current commit and **auto-rolls back** if the new code fails to start within 15 seconds.
 
 ### Option 1 — One click in the GUI
 
@@ -1767,7 +1771,7 @@ The `POST /api/upgrade/run` endpoint is **loopback-only** by design — only `12
 If you'd rather see the output stream past, just run the script directly:
 
 ```bash
-cd miniclosedai
+cd osyn
 ./upgrade.sh
 ```
 
@@ -1783,7 +1787,7 @@ The script verifies the new server actually answers `/api/upgrade/status` within
 4. The previous server is restarted on the same port.
 5. The modal shows the rollback notice with the previous SHA so you can investigate.
 
-Logs from the upgrade attempt land in `/tmp/miniclosedai-upgrade.log` for postmortem.
+Logs from the upgrade attempt land in `/tmp/osyn-upgrade.log` for postmortem.
 
 ### When the upgrade button isn't available
 
@@ -1800,7 +1804,7 @@ Three reasons the button stays hidden / disabled:
 
 ## LAN access
 
-To use MiniClosedAI from your phone, a tablet, or another machine on the same network:
+To use Osyn from your phone, a tablet, or another machine on the same network:
 
 ```bash
 uvicorn app:app --host 0.0.0.0 --port 8095
@@ -1837,23 +1841,23 @@ Snippets generated by the **API Code** modal use `window.location.origin`, so LA
 | Sidebar settings don't apply to API calls | The sidebar auto-saves with a 350 ms debounce. The save also flushes automatically when you open **API Code** or send a message. If a one-off call still seems stale, verify with `curl http://localhost:8095/api/conversations/<id>` and look at `model`, `system_prompt`, `params`. |
 | GUI answer different from API answer for the same message | Usually means the UI response was accidentally influenced by prior chat history that happened to include examples. The stateless API never replays history. Add the examples to the system prompt. |
 | Add-endpoint **Test connection** says *"Reachable, but 0 models available"* | The base URL is missing `/v1` (LM Studio, vLLM, OpenAI all serve the API under `/v1/*`). Edit the endpoint and change `http://host:1234` → `http://host:1234/v1`. |
-| Add-endpoint Test says **"Failed to fetch"** | Fixed. Older frontend ran the probe directly from the browser and got CORS-blocked. Hard-refresh the page — the modern Test button goes through the MiniClosedAI server. |
+| Add-endpoint Test says **"Failed to fetch"** | Fixed. Older frontend ran the probe directly from the browser and got CORS-blocked. Hard-refresh the page — the modern Test button goes through the Osyn server. |
 | LM Studio returns *"Invalid LM Studio API token"* (401) | Either paste a fresh key into the endpoint's **Edit → API key** field, or turn off *Require API key* in LM Studio's Developer tab for localhost use. |
 | Qwen3/DeepSeek-R1 on LM Studio keeps reasoning with **Thinking: Off** | Your LM Studio build is ignoring both `chat_template_kwargs.enable_thinking: false` and the `/no_think` magic token. Workaround: leave Thinking on (or pick a non-reasoning model like Gemma 4 / Llama 3.2 / Mistral for strict-output tasks). The soft-truncate fix still ensures the answer arrives even when reasoning runs. |
-| Bonsai endpoint returns responses that look like *another* bot's output | You pointed the Bonsai endpoint at `http://localhost:8095/v1` (MiniClosedAI's own port) instead of `http://localhost:8080/v1` (the llama.cpp server). The endpoint's model list then comes from MiniClosedAI's `/v1/models` (your saved conversation IDs), so picking one routes the chat through an unrelated bot. Edit the endpoint, change the port to **`8080`**, then reopen the Bonsai chat and reselect `Bonsai-8B.gguf` from the dropdown. |
+| Bonsai endpoint returns responses that look like *another* bot's output | You pointed the Bonsai endpoint at `http://localhost:8095/v1` (Osyn's own port) instead of `http://localhost:8080/v1` (the llama.cpp server). The endpoint's model list then comes from Osyn's `/v1/models` (your saved conversation IDs), so picking one routes the chat through an unrelated bot. Edit the endpoint, change the port to **`8080`**, then reopen the Bonsai chat and reselect `Bonsai-8B.gguf` from the dropdown. |
 | *"✂ Thinking hidden after N tokens. Model still finishing its reasoning; the answer will follow."* | Informational, not an error. The model exceeded your `max_thinking_tokens` soft cap; further reasoning is hidden from the UI but the stream stays open so content can still arrive. Raise the cap (or clear it) to see full thoughts; raise **Max Tokens** if the whole response gets cut off before the answer. |
 | Deleting an endpoint returns 409 with `bound_conversations` | Can't delete an endpoint any bot still uses. Either rebind each listed conversation to a different endpoint (change its model from the grouped dropdown) or delete those conversations first, then retry. |
 | Docker: `could not select device driver "nvidia"` on `up` | `nvidia-container-toolkit` missing on the host. `sudo apt install nvidia-container-toolkit && sudo systemctl restart docker`. Alternatively use the CPU override: `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build`. See [Docker quick start](#docker-quick-start-with-baked-models). |
 | Docker: build fails with `ENOSPC` during `ollama pull` | Docker `data-root` out of space. Check with `docker system df`, free up with `docker system prune`. Need ~15 GB headroom for the three-model build. |
 | Docker: stack is `healthy` but UI shows empty model dropdown | `docker compose exec ollama ollama list` — confirms baked models. If list is empty, a bake layer silently failed: `docker compose build --no-cache ollama` to rebuild; `/tmp/ollama-serve.log` inside the container has the pull log. |
-| Docker: MiniClosedAI container can't reach Ollama | `docker compose exec miniclosedai env \| grep OLLAMA_URL` must show `http://ollama:11434`. If it shows `http://localhost:...`, the compose `environment:` stanza on the `miniclosedai` service isn't loaded — did you hand-edit and typo it? |
+| Docker: Osyn container can't reach Ollama | `docker compose exec osyn env \| grep OLLAMA_URL` must show `http://ollama:11434`. If it shows `http://localhost:...`, the compose `environment:` stanza on the `osyn` service isn't loaded — did you hand-edit and typo it? |
 | Docker: switching GPU ↔ CPU override has no effect | Docker layer cache. `docker compose down && docker compose up -d --build` to force a fresh build. |
 
 ---
 
 ## Testing
 
-MiniClosedAI ships a single-file end-to-end test suite. One command, no extra dependencies, doesn't touch your real database, and doesn't require Ollama or LM Studio to be running — upstream backends are faked in-process.
+Osyn ships a single-file end-to-end test suite. One command, no extra dependencies, doesn't touch your real database, and doesn't require Ollama or LM Studio to be running — upstream backends are faked in-process.
 
 ```bash
 python test_e2e.py
@@ -1888,7 +1892,7 @@ The suite is designed so every time you add or change a feature, running it catc
 ### How it's wired
 
 - Uses FastAPI's built-in `TestClient` (ships with fastapi via starlette) — no real server port, nothing to kill between runs.
-- Overrides `db.DB_PATH` to a `tempfile`-managed path before importing `app`, so your real `miniclosedai.db` is never touched. Temp DB is cleaned up on exit.
+- Overrides `db.DB_PATH` to a `tempfile`-managed path before importing `app`, so your real `osyn.db` is never touched. Temp DB is cleaned up on exit.
 - Two in-process fake servers (`FakeOllama`, `FakeOpenAI`) thread-bound on random localhost ports. Each captures every request it receives so tests assert on *outgoing payloads*, not just responses — that's how we verify `/no_think` injection, `enable_thinking: false`, `reasoning_effort`, and model routing.
 - A `@test("name")` decorator auto-registers runners into an ordered list. Add a function at the bottom of the file and it runs next time — no master list to maintain.
 
@@ -1909,7 +1913,7 @@ Now every commit runs the suite first and refuses to record if anything is red.
 ## Project layout
 
 ```
-miniclosedai/
+osyn/
 ├── app.py                     # FastAPI routes (native + OpenAI-compat, multi-backend)
 ├── llm.py                     # Kind-dispatched client: Ollama + OpenAI-compat
 ├── db.py                      # SQLite schema + MINICLOSEDAI_DB_PATH env override
@@ -1938,7 +1942,7 @@ miniclosedai/
 ├── Hotel Reservations Bot.md       # Standalone bot recipe (conversational, qwen3:8b)
 ├── Dentist Appointment Bot.md      # Standalone bot recipe (conversational, qwen3:8b)
 ├── test_e2e.py                # Single-file end-to-end regression suite (39 tests)
-└── miniclosedai.db            # SQLite file (gitignored; Docker: in named volume)
+└── osyn.db            # SQLite file (gitignored; Docker: in named volume)
 ```
 
 **Backend:** ~900 LoC Python total. **Frontend:** ~1700 LoC JS + ~850 CSS + ~240 HTML. **Docker scaffolding:** ~200 LoC across 6 files.
@@ -1947,7 +1951,7 @@ miniclosedai/
 
 ## Security
 
-**MiniClosedAI ships with no authentication.** Anyone who can reach the HTTP port can:
+**Osyn ships with no authentication.** Anyone who can reach the HTTP port can:
 
 - Read, create, update, or delete any conversation.
 - Invoke any bot's endpoint (uses your local CPU/GPU, generates any output the bot is configured to).
@@ -1955,7 +1959,7 @@ miniclosedai/
 
 This is intentional — the target deployment is local-only on `127.0.0.1`, or on a trusted LAN.
 
-If you need to expose MiniClosedAI beyond that, put it behind:
+If you need to expose Osyn beyond that, put it behind:
 
 - A reverse proxy (nginx, Caddy) with basic auth or OAuth2-Proxy.
 - A VPN (Tailscale, WireGuard).

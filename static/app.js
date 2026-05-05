@@ -1,4 +1,4 @@
-// MiniClosedAI frontend — vanilla JS.
+// Osyn frontend — vanilla JS.
 
 const els = {
   modelSelect: document.getElementById("model-select"),
@@ -191,11 +191,11 @@ function saveSettings() {
     system_prompt: els.systemPrompt.value,
     think_select: els.think.value,
   };
-  localStorage.setItem("miniclosedai:settings", JSON.stringify(s));
+  localStorage.setItem("osyn:settings", JSON.stringify(s));
 }
 function loadSettings() {
   try {
-    const s = JSON.parse(localStorage.getItem("miniclosedai:settings") || "{}");
+    const s = JSON.parse(localStorage.getItem("osyn:settings") || "{}");
     if (s.temperature != null) els.temperature.value = s.temperature;
     if (s.max_tokens != null) els.maxTokens.value = s.max_tokens;
     if (s.top_p != null) els.topP.value = s.top_p;
@@ -367,7 +367,7 @@ async function loadModels() {
 
   // Restore last-used (model, backend_id) pair from localStorage.
   try {
-    const saved = JSON.parse(localStorage.getItem("miniclosedai:settings") || "{}");
+    const saved = JSON.parse(localStorage.getItem("osyn:settings") || "{}");
     if (saved.model) _selectModelOption(saved.model, saved.backend_id);
   } catch {}
 
@@ -540,7 +540,7 @@ const EMPTY_STATE_HTML = `
 const EMPTY_STATE_NO_BACKENDS_HTML = `
   <div class="empty-state empty-state-no-backends">
     <h2>Welcome — let's add your first endpoint</h2>
-    <p>This MiniClosedAI install isn't shipping a built-in Ollama. Point it at any external compute source — a remote Ollama, an LM Studio, vLLM, llama.cpp server, or any OpenAI-compatible URL — through the Settings page. The endpoint's models will appear in the dropdown above.</p>
+    <p>This Osyn install isn't shipping a built-in Ollama. Point it at any external compute source — a remote Ollama, an LM Studio, vLLM, llama.cpp server, or any OpenAI-compatible URL — through the Settings page. The endpoint's models will appear in the dropdown above.</p>
     <button class="btn btn-primary" data-action="open-settings">Open Settings → Add endpoint</button>
   </div>
 `;
@@ -1405,7 +1405,7 @@ console.log(response);`;
 }
 
 // OpenAI-compatible snippets — caller uses the OpenAI SDK (or the raw HTTP
-// schema) pointed at MiniClosedAI's /v1 endpoint. The conversation ID goes
+// schema) pointed at Osyn's /v1 endpoint. The conversation ID goes
 // in the `model` field; any caller-supplied sampling params are ignored by
 // the server in favor of the bot's GUI-saved config.
 function buildOpenAISnippet(tab, mode, base, convId) {
@@ -1442,7 +1442,7 @@ curl -X POST ${url} \\
       return `# pip install openai
 from openai import OpenAI
 
-# Drop-in for OpenAI: point base_url at MiniClosedAI, use chat id as 'model'.
+# Drop-in for OpenAI: point base_url at Osyn, use chat id as 'model'.
 client = OpenAI(base_url="${base}/v1", api_key="not-required")
 
 stream = client.chat.completions.create(
@@ -1728,7 +1728,7 @@ async function deleteCurrentConversation() {
 // ---------- Sidebar splitter ----------
 const SIDEBAR_DEFAULT = 300;
 const SIDEBAR_MIN = 220;
-const SIDEBAR_KEY = "miniclosedai:sidebarWidth";
+const SIDEBAR_KEY = "osyn:sidebarWidth";
 
 function sidebarMax() {
   return Math.max(SIDEBAR_MIN, Math.min(window.innerWidth * 0.7, 900));
@@ -1781,7 +1781,7 @@ function initSplitter() {
 // ---------- Horizontal splitter (System Prompt height) ----------
 const SYS_PROMPT_DEFAULT = 220;
 const SYS_PROMPT_MIN = 80;
-const SYS_PROMPT_KEY = "miniclosedai:sysPromptHeight";
+const SYS_PROMPT_KEY = "osyn:sysPromptHeight";
 
 function sysPromptMax() {
   // Sidebar scrolls now — be generous. Leave a small margin so there's
@@ -1833,7 +1833,7 @@ function initHSplitter() {
 }
 
 // ---------- Theme (Light / Dark / System) ----------
-const THEME_KEY = "miniclosedai:theme";
+const THEME_KEY = "osyn:theme";
 const THEME_ORDER = ["system", "light", "dark"];
 
 function resolvedTheme(choice) {
@@ -1872,7 +1872,7 @@ function initTheme() {
 }
 
 // ---------- Sidebar collapse ----------
-const SIDEBAR_COLLAPSED_KEY = "miniclosedai:sidebarCollapsed";
+const SIDEBAR_COLLAPSED_KEY = "osyn:sidebarCollapsed";
 
 function applySidebarCollapsed(collapsed) {
   document.body.classList.toggle("sidebar-collapsed", collapsed);
@@ -2473,7 +2473,7 @@ function initBackendsUI() {
 // ---------- Page routing (activity bar) ----------
 // Purely CSS-driven — flipping body[data-page] hides/shows .page-* containers
 // without unmounting anything. Chat streams keep running across switches.
-const ACTIVE_PAGE_KEY = "miniclosedai:activePage";
+const ACTIVE_PAGE_KEY = "osyn:activePage";
 
 function applyActivePage(page) {
   const p = (page === "settings") ? "settings" : "dashboard";
@@ -2646,7 +2646,7 @@ function _renderUpgradeModalBody(status, opts = {}) {
       const note = document.createElement("div");
       note.style.color = "var(--text-muted)";
       note.style.fontSize = "12px";
-      note.textContent = "Auto-rollback ran — your install is back on the previous version. See /tmp/miniclosedai-upgrade.log for details.";
+      note.textContent = "Auto-rollback ran — your install is back on the previous version. See /tmp/osyn-upgrade.log for details.";
       body.appendChild(note);
       runBtn.textContent = "Close";
       runBtn.disabled = false;
@@ -2682,7 +2682,7 @@ docker compose up -d --build</pre>`;
   if (status.installed_via !== "git") {
     body.innerHTML = `
       <p>${status.reason || "This install isn't a git checkout — in-place upgrades aren't available."}</p>
-      <p>Re-clone from <code>https://github.com/edantonio505/miniclosedai.git</code> if you want one-click upgrades.</p>`;
+      <p>Re-clone from <code>https://github.com/Osyn-AI/osyn.git</code> if you want one-click upgrades.</p>`;
     runBtn.hidden = true;
     return;
   }
@@ -2927,7 +2927,7 @@ async function _handleImportFile(file) {
     return;
   }
   if (parsed?.format !== "miniclosed-bot") {
-    alert(`Not a MiniClosedAI bot file (format=${parsed?.format ?? "missing"}).`);
+    alert(`Not a Osyn bot file (format=${parsed?.format ?? "missing"}).`);
     return;
   }
   const result = await _runImport(parsed, null);

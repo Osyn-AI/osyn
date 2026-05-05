@@ -1,0 +1,48 @@
+name: Sync from upstream (MiniClosedAI)
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # every day at 8am UTC
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/edantonio505/miniclosedai.git
+
+      - name: Fetch upstream
+        run: git fetch upstream
+
+      - name: Check for new commits
+        id: check
+        run: |
+          BEHIND=$(git rev-list HEAD..upstream/main --count 2>/dev/null || echo "0")
+          echo "behind=$BEHIND" >> $GITHUB_OUTPUT
+          echo "Upstream is $BEHIND commits ahead"
+
+      - name: Create sync branch
+        if: steps.check.outputs.behind != '0'
+        run: |
+          BRANCH="sync/upstream-$(date +%Y%m%d)"
+          git checkout -b $BRANCH
+          git merge upstream/main --no-edit --allow-unrelated-histories || true
+          git push origin $BRANCH
+          echo "SYNC_BRANCH=$BRANCH" >> $GITHUB_ENV
+
+      - name: Open PR
+        if: steps.check.outputs.behind != '0'
+        run: |
+          gh pr create \
+            --title "Sync: upstream MiniClosedAI updates ($(date +%Y-%m-%d))" \
+            --body "Automatic sync from [edantonio505/miniclosedai](https://github.com/edantonio505/miniclosedai). Review changes before merging — re-apply any Osyn-specific customizations if there are conflicts." \
+            --base main \
+            --head $SYNC_BRANCH
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
