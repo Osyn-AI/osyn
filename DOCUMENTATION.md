@@ -32,11 +32,13 @@ For the extreme-quantization 1-bit Bonsai integration (`llama.cpp` server on por
 9. [Thinking / reasoning control](#thinking--reasoning-control)
 10. [Stopping generation](#stopping-generation)
 11. [Fine-tuning data export](#fine-tuning-data-export)
-12. [Database](#database)
-13. [Configuration](#configuration)
-14. [File layout](#file-layout)
-15. [Security](#security)
-16. [Troubleshooting](#troubleshooting)
+12. [Bot import / export](#bot-import--export)
+13. [Self-upgrade](#self-upgrade)
+14. [Database](#database)
+15. [Configuration](#configuration)
+16. [File layout](#file-layout)
+17. [Security](#security)
+18. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -599,6 +601,8 @@ PATCH  /api/conversations/{id}/messages/{index}   → edit one stored message in
 GET    /api/conversations/{id}/export.csv             → text-only SFT CSV (input,output)
 GET    /api/conversations/{id}/export.zip             → multimodal SFT bundle (JSONL + images)
 GET    /api/conversations/{id}/export.classify.zip    → image-classification dataset (image,label CSV + images/)
+GET    /api/conversations/{id}/export                 → portable bot config (.miniclosed-bot.json)
+POST   /api/conversations/import                      → import a .miniclosed-bot.json file
 ```
 
 **Create body**:
@@ -960,6 +964,159 @@ print(df["label"].value_counts())
 ### From SFT to DPO
 
 The `original_content` field means the database already contains preference triples whenever you've edited a message: `(prompt, chosen=edited content, rejected=original_content)`. A short script reading the raw `messages` JSON produces a DPO JSONL file with no UI changes required. This is the intended upgrade path when your demonstration dataset stops improving the model (typically many thousands of pairs in).
+
+---
+
+## Bot import / export
+
+A separate channel from fine-tuning data export. The CSV / ZIP exports above are for **training data**; this section is for **moving a bot's configuration between instances**. Different file, different consumer, different security stance.
+
+### Why a dedicated format
+
+A bot in MiniClosedAI is a row in the `conversations` table — title, model name, system prompt, sampling params, optional message history. The natural "share this bot" question is: "I built this in dev, can I run the same thing on the production box / on a teammate's laptop?" Two non-options that we explicitly rejected:
+
+1. **`sqlite3 .dump | sqlite3`** — drags every other bot, every backend row (with its API keys), and is fragile across DB version drift.
+2. **`POST /api/conversations` with the right body** — works, but the caller has to translate between the source instance's `backend_id` and the target's, and there's no portable file to email/Slack/git.
+
+So: a small JSON file the user can move around, plus an importer that does the backend resolution.
+
+### Endpoints
+
+```
+GET  /api/conversations/{id}/export?include_history=false
+       → 200 application/json
+       → Content-Disposition: attachment; filename="<title-slug>.miniclosed-bot.json"
+
+POST /api/conversations/import
+       → 201 (auto-matched a backend)
+       → 409 (no enabled backend serves the model — payload includes a picker list)
+       → 400 (malformed file or unknown format_version)
+```
+
+### File schema (`format_version: 1`)
+
+```json
+{
+  "format": "miniclosed-bot",
+  "format_version": 1,
+  "exported_at": "2026-05-05T18:30:00+00:00",
+  "bot": {
+    "title": "Doctor's Office Bot",
+    "model": "qwen3:8b",
+    "system_prompt": "You are the receptionist at...",
+    "params": {
+      "temperature": 0.4,
+      "max_tokens": 2048,
+      "top_p": 0.9,
+      "top_k": 40,
+      "think": false,
+      "max_thinking_tokens": null
+    }
+  },
+  "sample_messages": []
+}
+```
+
+Key shape rules:
+
+- **`format`** is always the literal string `"miniclosed-bot"`. Importer rejects anything else with **400**.
+- **`format_version`** is an integer. The current server understands version `1`. A future server bumping to `2` must keep accepting `1` (back-compat); a v1 server given a v2 file rejects with **400** rather than silently dropping unknown fields.
+- **`bot.model`** is a *string*, not a backend ID. Backend IDs are per-instance and meaningless across machines. The importer uses this string to find a matching backend.
+- **`bot.params`** mirrors the in-DB `params` JSON column — same keys as the [Conversations create body](#conversations). Unknown keys are accepted and persisted (forward-compat with future param additions).
+- **`sample_messages`** is `[]` by default. When `?include_history=true` was passed on export, it's the exact `messages` JSON column verbatim — including any `attachments` arrays with base64-inlined images.
+- **What's deliberately absent**: `backend_id`, API keys, backend rows, DB ids, `created_at`, `updated_at`. The file is safe to share over Slack / email / git.
+
+### Import resolution flow
+
+```
+                    ┌─────────────────────┐
+POST /import  ───►  │ Validate format +   │
+                    │ format_version ≤ 1  │
+                    └────────┬────────────┘
+                             │
+                ┌────────────┴────────────┐
+                ▼                         ▼
+         backend_id given?         backend_id missing
+                │                         │
+                ▼                         ▼
+       Use it (validate          Scan enabled backends,
+        it exists, 400            list each one's models,
+        otherwise)                pick first one whose
+                │                  model list contains
+                │                  bot.model (auto-match)
+                │                         │
+                │                  match? ┴── no ──► 409 needs_backend
+                │                  yes
+                └─────────┬───────────────┘
+                          ▼
+              Insert NEW conversation row
+              (title bumped if it collides)
+                          ▼
+                  201 { id, title,
+                        matched_backend_id,
+                        warnings: [...] }
+```
+
+Five concrete behaviors worth knowing:
+
+1. **Always inserts a new row**. Never overwrites. There's no `?replace_id=` parameter on purpose — collisions across instances would be ambiguous.
+2. **Title collision → suffix**. If a bot named "Doctor's Office Bot" already exists, the import becomes "Doctor's Office Bot (2)" (then `(3)`, etc.).
+3. **Auto-match is the default; explicit override is the escape hatch**. POST `{"data": ..., "backend_id": 5}` skips the model probe entirely and trusts the caller. The 201 returns whichever `backend_id` was actually used as `matched_backend_id`.
+4. **`needs_backend` is not a failure, it's a question**. The 409 body includes `available_backends: [{id, name, kind, model_present, model_count}, ...]` — the GUI uses this to render a picker. You retry the same POST with `backend_id` set.
+5. **Probe failures are warnings, not errors**. If a backend's `is_running` check times out or `/api/tags` 500s, the import doesn't blow up — that backend is treated as having no models, and a `"backend '...' probe failed: ..."` line lands in the 201's `warnings` array.
+
+### Worked round-trip
+
+```bash
+# On instance A:
+curl -o doctor.miniclosed-bot.json \
+  http://localhost:8095/api/conversations/3/export
+# → 12 KB JSON
+
+# Email/Slack/git the file to instance B (different machine, different DB).
+
+# On instance B — happy path (auto-match):
+curl -X POST http://localhost:8095/api/conversations/import \
+  -H "Content-Type: application/json" \
+  -d "{\"data\": $(cat doctor.miniclosed-bot.json)}"
+# → 201 { "id": 14, "title": "Doctor's Office Bot",
+#         "matched_backend_id": 1, "warnings": [] }
+
+# On instance B — picker path (no enabled backend has qwen3:8b):
+curl -X POST http://localhost:8095/api/conversations/import \
+  -H "Content-Type: application/json" \
+  -d "{\"data\": $(cat doctor.miniclosed-bot.json)}"
+# → 409 { "needs_backend": true, "model": "qwen3:8b",
+#         "available_backends": [
+#           {"id": 1, "name": "Built-in Ollama", "kind": "ollama",
+#            "model_present": false, "model_count": 3},
+#           {"id": 4, "name": "LM Studio", "kind": "openai",
+#            "model_present": false, "model_count": 12}
+#         ],
+#         "detail": "No enabled backend currently serves model..." }
+
+# Retry with explicit backend_id:
+curl -X POST http://localhost:8095/api/conversations/import \
+  -H "Content-Type: application/json" \
+  -d "{\"data\": $(cat doctor.miniclosed-bot.json), \"backend_id\": 4}"
+# → 201 { "id": 15, ... "matched_backend_id": 4 }
+```
+
+### GUI counterparts
+
+- **Export**: top-bar download icon → popover menu → **Bot config (JSON)** or **Bot config + history (JSON)**.
+- **Import**: top-bar upload-cloud icon (next to "+ New Chat") → file picker → success switches to the new bot, 409 opens the picker modal with radio buttons over `available_backends`.
+
+### Security stance
+
+The format is intentionally minimal so a bot file can be shared without leaking secrets:
+
+- No API keys (those live in the `backends` table, never in conversations).
+- No backend rows or `base_url`s — the importing instance uses its *own* registered backends.
+- No DB ids — the importer assigns fresh ones.
+- No upstream credentials of any kind.
+
+If you need to *also* share an endpoint (e.g. a hosted Bonsai relay you want a teammate to use), that's a separate manual step on their side: ⚙️ Settings → Add endpoint. We could add a portable-endpoint format later, but it would need an explicit "include the API key?" toggle and clear warnings.
 
 ---
 

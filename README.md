@@ -374,7 +374,9 @@ Your selection persists across reloads. Streaming chats keep playing when you fl
 | **Model** `<select>` | **Grouped by endpoint.** Each registered backend contributes an `<optgroup>` with its available models. Picking a model from a different group switches the bot's backend too. |
 | **Conversation** `<select>` | Switch between saved bots. Shows title + backend model. |
 | **+ New Chat** | Prompts for a name, then creates a fresh bot with default params (model + backend inherited from current selection). |
+| **Import bot** (upload-cloud icon) | Pick a `.miniclosed-bot.json` file exported from another instance and create a new bot from it. If no enabled backend serves the bot's model, a picker modal asks you which backend to run it on. See [Sharing bots between instances](./DOCUMENTATION.md#bot-import--export). |
 | **↺ Clear** | Wipes messages in the current conversation, keeps the config. |
+| **Download dataset / bot** (download icon) | Popover menu with five export formats: text CSV, multimodal JSONL+images ZIP, image-classification ZIP, **bot config JSON** (portable, no secrets), and **bot config + history JSON**. The two `.miniclosed-bot.json` formats are for moving a bot to another instance. |
 | **🗑 Delete** | Removes the current conversation entirely. |
 | **API Code** | Opens the snippet modal (see below). |
 | **Theme toggle** | Cycles System → Light → Dark → System. Respects `prefers-color-scheme` while on System. |
@@ -719,6 +721,8 @@ PATCH  /api/conversations/{id}/messages/{index}   → edit a stored message in p
 GET    /api/conversations/{id}/export.csv             → download this chat as an SFT CSV (text-only)
 GET    /api/conversations/{id}/export.zip             → JSONL + images bundle (multimodal SFT)
 GET    /api/conversations/{id}/export.classify.zip    → image-classification dataset (image,label CSV + images/)
+GET    /api/conversations/{id}/export                 → portable bot config (.miniclosed-bot.json)
+POST   /api/conversations/import                      → import a .miniclosed-bot.json file
 ```
 
 **Create** — supply any subset of config fields. `backend_id` defaults to `1` (built-in Ollama); set it to pin the bot to an OpenAI-compatible endpoint you registered in Settings.
@@ -858,6 +862,39 @@ df["label"].value_counts()
 # drunk    142
 # sober    138
 ```
+
+**GET `.../export`** — portable bot config as a `.miniclosed-bot.json` file. Carries title, model name, system prompt, and sampling params; never carries `backend_id`, API keys, or DB ids. Optional `?include_history=true` includes the conversation messages (image attachments are inlined as base64, so the file gets much bigger). Response is `application/json` with `Content-Disposition: attachment; filename="<title>.miniclosed-bot.json"`. 404 if the conversation doesn't exist.
+
+```bash
+# Just the config (small file, safe to share)
+curl -o doctor.miniclosed-bot.json \
+  http://localhost:8095/api/conversations/3/export
+
+# With message history (bigger if there are attachments)
+curl -o doctor-full.miniclosed-bot.json \
+  "http://localhost:8095/api/conversations/3/export?include_history=true"
+```
+
+The shape is documented in [DOCUMENTATION.md → Bot import / export](./DOCUMENTATION.md#bot-import--export).
+
+**POST `/api/conversations/import`** — round-trip the file onto another instance. Body is `{"data": <export object>, "backend_id": <int|null>}`. The server scans enabled backends and auto-matches one whose model list contains the exported `bot.model`; if no match, it returns **409** with the candidate backend list so the GUI can prompt the user. Always inserts a *new* conversation row — colliding titles get a suffix.
+
+```bash
+# 1. Auto-resolve backend
+curl -X POST http://localhost:8095/api/conversations/import \
+  -H "Content-Type: application/json" \
+  -d "{\"data\": $(cat doctor.miniclosed-bot.json)}"
+# → {"id": 14, "title": "Doctor's Office Bot", "matched_backend_id": 1, "warnings": []}
+
+# 2. Force a specific backend (bypasses auto-match)
+curl -X POST http://localhost:8095/api/conversations/import \
+  -H "Content-Type: application/json" \
+  -d "{\"data\": $(cat doctor.miniclosed-bot.json), \"backend_id\": 2}"
+```
+
+If the response is **409 needs_backend**, the server is telling you no enabled backend currently advertises the requested model. Inspect the `available_backends` array in the body, pick one whose `model_present` is true (or any backend if you want to retry against an arbitrary one), and POST again with `backend_id` set.
+
+In the GUI the same flow is two clicks: **Download icon → Bot config (JSON)** to export, **Upload-cloud icon next to "New chat" → pick the file** to import.
 
 ### Chat
 
